@@ -1,0 +1,27 @@
+# Sanfuclaw Configuration
+# Copy this file to sanfuclaw.toml and fill in your values.
+# API keys can also be set via environment variables (LLM_API_KEY, TELEGRAM_BOT_TOKEN)
+
+[llm]
+provider = "openai_compat"          # or "anthropic"
+model = "minimax/minimax-m2.5"
+base_url = "https://api.hpc-ai.com/inference/v1"
+api_key = ""                        # Your LLM API key
+max_tokens = 4096
+temperature = 0.7
+system_prompt = "You are a helpful personal AI assistant called Sanfuclaw. You are running locally on the user's machine. Be concise and helpful."
+
+[gateway]
+host = "127.0.0.1"
+port = 18789
+
+# Channel configurations
+# Uncomment and set bot_token to enable Telegram
+# [channels.telegram]
+# type = "telegram"
+# bot_token = ""
+# allowed_users = []  # Empty = allow all, or list of usernames/IDs
+
+# [channels.discord]
+# type = "discord"
+# bot_token = ""

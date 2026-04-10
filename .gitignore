@@ -134,6 +134,12 @@ celerybeat.pid
 # SageMath parsed files
 *.sage.py
 
+# Sanfuclaw
+sanfuclaw.toml
+*.db
+*.db-journal
+*.db-wal
+
 # Environments
 .env
 .envrc
