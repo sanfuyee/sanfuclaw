@@ -19,6 +19,7 @@ dependencies = [
 
 [project.optional-dependencies]
 telegram = ["python-telegram-bot>=21.0"]
+weixin = ["qrcode>=7.0"]
 discord = ["discord.py>=2.4.0"]
 dev = [
     "pytest>=8.0",

@@ -21,7 +21,7 @@ def start(
     config: str = typer.Option("sanfuclaw.toml", "--config", "-c", help="Path to config file"),
     model: str = typer.Option(None, "--model", "-m", help="Override LLM model"),
     provider: str = typer.Option(None, "--provider", "-p", help="Override LLM provider"),
-    channel: str = typer.Option("cli", "--channel", help="Channel to run (cli, telegram, all)"),
+    channel: str = typer.Option("cli", "--channel", help="Channel to run (cli, telegram, weixin, all)"),
 ):
     """Start the Sanfuclaw agent."""
     asyncio.run(_run(config, model, provider, channel))
@@ -116,6 +116,15 @@ async def _run(config_path: str, model: str | None, provider: str | None, channe
         router.register_channel(tg)
         channels.append(tg)
 
+    if channel_mode in ("weixin", "all"):
+        from sanfuclaw.channels.weixin import WeixinChannel
+        wx = WeixinChannel()
+        if not wx._creds.is_valid:
+            console.print("[red]Error:[/red] WeChat not logged in. Run 'sanfuclaw weixin-login' first.")
+            raise typer.Exit(1)
+        router.register_channel(wx)
+        channels.append(wx)
+
     if not channels:
         console.print(f"[red]Error:[/red] Unknown channel: {channel_mode}")
         raise typer.Exit(1)
@@ -176,6 +185,31 @@ def serve(
     console.print()
 
     uvicorn.run(server.app, host=final_host, port=final_port, log_level="info")
+
+
+@app.command()
+def weixin_login(
+    base_url: str = typer.Option(
+        "https://ilinkai.weixin.qq.com", "--base-url", help="iLink Bot API base URL"
+    ),
+):
+    """Login to WeChat via QR code scan."""
+    asyncio.run(_weixin_login(base_url))
+
+
+async def _weixin_login(base_url: str):
+    from sanfuclaw.channels.weixin import qr_login
+
+    console.print("[bold]WeChat QR Login[/bold]")
+    try:
+        creds = await qr_login(base_url)
+        console.print(f"[green]Login successful![/green]")
+        console.print(f"  Bot ID:  {creds.bot_id}")
+        console.print(f"  User ID: {creds.user_id}")
+        console.print(f"  Credentials saved to: {creds.path.absolute()}")
+    except Exception as e:
+        console.print(f"[red]Login failed:[/red] {e}")
+        raise typer.Exit(1)
 
 
 @app.command()

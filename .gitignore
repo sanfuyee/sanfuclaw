@@ -136,6 +136,8 @@ celerybeat.pid
 
 # Sanfuclaw
 sanfuclaw.toml
+weixin_credentials.json
+weixin_qr.png
 *.db
 *.db-journal
 *.db-wal
