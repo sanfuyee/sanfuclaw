@@ -226,11 +226,11 @@ class WSChannel:
         pass
 
     async def send(self, session_id: str, content: str, **kwargs) -> None:
-        streaming = kwargs.get("streaming", False)
-        if streaming:
+        done = kwargs.get("done", False)
+        if done:
+            await self._server.send_to_ws(session_id, "done", content)
+        elif kwargs.get("streaming", False):
             await self._server.send_to_ws(session_id, "stream", content)
-        else:
-            await self._server.send_to_ws(session_id, "message", content)
 
     async def send_typing(self, session_id: str) -> None:
         await self._server.send_to_ws(session_id, "typing", "")

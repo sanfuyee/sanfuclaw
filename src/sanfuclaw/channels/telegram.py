@@ -90,23 +90,18 @@ class TelegramChannel:
         if not self._app:
             return
 
-        # Extract chat_id from session_id (format: "tg-{chat_id}")
         chat_id = int(session_id.replace("tg-", ""))
-        streaming = kwargs.get("streaming", False)
+        done = kwargs.get("done", False)
 
-        if streaming:
-            # Accumulate streaming chunks and send periodically
+        if done:
+            # Flush accumulated response as one message
+            text = self._response_buffers.pop(chat_id, content).strip()
+            if text:
+                await self._send_text(chat_id, text)
+        elif kwargs.get("streaming", False):
             if chat_id not in self._response_buffers:
                 self._response_buffers[chat_id] = ""
-
             self._response_buffers[chat_id] += content
-
-            # Send when we hit a newline at the end (response complete)
-            if content == "\n" and self._response_buffers[chat_id].strip():
-                text = self._response_buffers.pop(chat_id).strip()
-                await self._send_text(chat_id, text)
-        else:
-            await self._send_text(chat_id, content)
 
     async def _send_text(self, chat_id: int, text: str) -> None:
         """Send text to a Telegram chat, splitting if too long."""

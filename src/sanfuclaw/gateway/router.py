@@ -61,14 +61,13 @@ class Router:
         await channel.send_typing(envelope.message.session_id)
 
         # Stream response back to channel
-        first_chunk = True
+        full_response = ""
         async for chunk in agent.process(envelope, session):
-            if first_chunk:
-                first_chunk = False
+            full_response += chunk
             await channel.send(envelope.message.session_id, chunk, streaming=True)
 
-        # Final newline after streaming completes
-        await channel.send(envelope.message.session_id, "\n", streaming=True)
+        # Signal stream complete — flush buffered response
+        await channel.send(envelope.message.session_id, full_response, done=True)
 
         # Persist session and messages
         if self._session_manager:

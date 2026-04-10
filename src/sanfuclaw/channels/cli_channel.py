@@ -34,15 +34,14 @@ class CLIChannel:
 
     async def send(self, session_id: str, content: str, **kwargs) -> None:
         """Print assistant response to terminal."""
-        streaming = kwargs.get("streaming", False)
-        if streaming:
-            # For streaming, print without newline
+        done = kwargs.get("done", False)
+        if done:
+            # End of response
+            sys.stdout.write("\n")
+            sys.stdout.flush()
+        elif kwargs.get("streaming", False):
             sys.stdout.write(content)
             sys.stdout.flush()
-        else:
-            console.print()
-            console.print(Markdown(content))
-            console.print()
 
     async def send_typing(self, session_id: str) -> None:
         console.print("[dim]Thinking...[/dim]", end="")

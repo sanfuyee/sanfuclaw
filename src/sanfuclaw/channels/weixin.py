@@ -139,13 +139,17 @@ class WeixinAPI:
         resp.raise_for_status()
         return resp.json()
 
-    async def get_config(self) -> dict[str, Any]:
+    async def get_config(self, user_id: str, context_token: str = "") -> dict[str, Any]:
         """Get bot configuration (includes typing_ticket)."""
         client = await self._ensure_client()
         resp = await client.post(
             "/ilink/bot/getconfig",
             headers=self._headers(),
-            json={"base_info": self._base_info()},
+            json={
+                "ilink_user_id": user_id,
+                "context_token": context_token,
+                "base_info": self._base_info(),
+            },
         )
         resp.raise_for_status()
         return resp.json()
@@ -283,12 +287,7 @@ class WeixinChannel:
                 "WeChat credentials not found. Run 'sanfuclaw weixin-login' first."
             )
 
-        # Fetch config for typing ticket
-        try:
-            config = await self._api.get_config()
-            self._typing_ticket = config.get("typing_ticket", "")
-        except Exception as e:
-            logger.warning(f"Failed to get WeChat config: {e}")
+        # Typing ticket will be fetched on first message (needs user_id + context_token)
 
         self._running = True
         self._poll_task = asyncio.create_task(self._poll_loop())
@@ -369,6 +368,9 @@ class WeixinChannel:
         # Store context_token for replies
         if from_user and context_token:
             self._context_tokens[from_user] = context_token
+            # Refresh typing ticket if we don't have one
+            if not self._typing_ticket:
+                asyncio.create_task(self._fetch_typing_ticket(from_user, context_token))
 
         # Extract text from item_list
         text = self._extract_text(raw_msg.get("item_list", []))
@@ -413,23 +415,18 @@ class WeixinChannel:
     async def send(self, session_id: str, content: str, **kwargs) -> None:
         """Send a message back to the WeChat user.
 
-        Accumulates streaming chunks and sends the complete message
-        when the final newline is received (WeChat doesn't support streaming).
+        Accumulates streaming chunks and sends as one message when done.
         """
-        streaming = kwargs.get("streaming", False)
+        done = kwargs.get("done", False)
 
-        if streaming:
+        if done:
+            text = self._response_buffers.pop(session_id, content).strip()
+            if text:
+                await self._send_text(session_id, text)
+        else:
             if session_id not in self._response_buffers:
                 self._response_buffers[session_id] = ""
             self._response_buffers[session_id] += content
-
-            # The router sends a trailing "\n" when streaming is complete
-            if content == "\n" and self._response_buffers[session_id].strip():
-                text = self._response_buffers.pop(session_id).strip()
-                await self._send_text(session_id, text)
-        else:
-            if content.strip():
-                await self._send_text(session_id, content)
 
     async def _send_text(self, session_id: str, text: str) -> None:
         """Send a complete text message to the WeChat user."""
@@ -458,6 +455,14 @@ class WeixinChannel:
             await self._api.send_message(req)
         except Exception as e:
             logger.error(f"Failed to send WeChat message: {e}")
+
+    async def _fetch_typing_ticket(self, user_id: str, context_token: str) -> None:
+        """Fetch typing ticket from getconfig."""
+        try:
+            config = await self._api.get_config(user_id, context_token)
+            self._typing_ticket = config.get("typing_ticket", "")
+        except Exception as e:
+            logger.warning(f"Failed to get typing ticket: {e}")
 
     async def send_typing(self, session_id: str) -> None:
         """Send typing indicator via WeChat."""

@@ -17,6 +17,9 @@ class StreamChunk:
     tool_name: str = ""
     tool_call_id: str = ""
     tool_input: dict[str, Any] = field(default_factory=dict)
+    # Token usage (populated on USAGE chunks)
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 class LLMTransport(Protocol):

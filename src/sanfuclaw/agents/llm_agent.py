@@ -25,6 +25,7 @@ class LLMAgent:
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
+        max_history: int = 20,
     ):
         self.name = name
         self._transport = transport
@@ -33,30 +34,24 @@ class LLMAgent:
         self._model = model
         self._max_tokens = max_tokens
         self._temperature = temperature
+        self._max_history = max_history
 
     def _build_messages(self, session: Session) -> list[dict]:
         """Build messages in the correct format for the current transport."""
+        # Trim history to max_history most recent messages
+        if len(session.history) > self._max_history:
+            session.history = session.history[-self._max_history:]
+
         fmt = getattr(self._transport, "message_format", "anthropic")
         if fmt == "openai":
             return self._build_openai_tool_messages(session)
         else:
             return self._build_anthropic_tool_messages(session)
 
-    async def process(self, envelope: Envelope, session: Session) -> AsyncIterator[str]:
-        """Process a message and stream back response chunks."""
-        # Add user message to session history
-        session.add_message(envelope.message)
-
-        # Build messages for LLM (format-aware for tool call history)
-        messages = self._build_messages(session)
-
-        # Get tool schemas if tools are registered
-        tools = self._tools.to_llm_schemas() or None
-
-        # Stream response from LLM
-        full_response = ""
-        tool_calls: list[StreamChunk] = []
-
+    async def _stream_llm(
+        self, messages: list[dict], tools: list[dict] | None,
+    ) -> AsyncIterator[StreamChunk]:
+        """Thin wrapper around transport.complete."""
         async for chunk in self._transport.complete(
             messages=messages,
             tools=tools,
@@ -65,18 +60,51 @@ class LLMAgent:
             temperature=self._temperature,
             system=self._system_prompt,
         ):
-            if chunk.type == StreamChunkType.TEXT_DELTA:
-                full_response += chunk.data
-                yield chunk.data
-            elif chunk.type == StreamChunkType.TOOL_USE and chunk.tool_input:
-                # Complete tool call with input ready
-                tool_calls.append(chunk)
-            elif chunk.type == StreamChunkType.STOP:
-                pass
+            yield chunk
 
-        # Handle tool calls if any
-        if tool_calls:
-            # Add assistant message with tool use to history
+    async def process(self, envelope: Envelope, session: Session) -> AsyncIterator[str]:
+        """Process a message and stream back response chunks."""
+        session.add_message(envelope.message)
+        tools = self._tools.to_llm_schemas() or None
+
+        total_input_tokens = 0
+        total_output_tokens = 0
+        trace: list[str] = []  # collect step info for final summary
+        max_tool_rounds = 5
+
+        for round_num in range(max_tool_rounds + 1):
+            messages = self._build_messages(session)
+            step_label = "LLM" if round_num == 0 else "LLM (follow-up)"
+
+            full_response = ""
+            tool_calls: list[StreamChunk] = []
+            step_input = 0
+            step_output = 0
+
+            async for chunk in self._stream_llm(messages, tools):
+                if chunk.type == StreamChunkType.TEXT_DELTA:
+                    full_response += chunk.data
+                    yield chunk.data
+                elif chunk.type == StreamChunkType.TOOL_USE and chunk.tool_input:
+                    tool_calls.append(chunk)
+                elif chunk.type == StreamChunkType.USAGE:
+                    step_input = chunk.input_tokens
+                    step_output = chunk.output_tokens
+                    total_input_tokens += step_input
+                    total_output_tokens += step_output
+
+            trace.append(f"{step_label}: {step_input} in / {step_output} out")
+
+            if not tool_calls:
+                # Save only the LLM's actual response, not the trace
+                session.add_message(Message(
+                    role=MessageRole.ASSISTANT,
+                    content=full_response,
+                    session_id=session.id,
+                ))
+                break
+
+            # Save assistant message with tool calls
             session.add_message(Message(
                 role=MessageRole.ASSISTANT,
                 content=full_response,
@@ -87,15 +115,17 @@ class LLMAgent:
                 ]},
             ))
 
-            # Execute each tool and collect results
+            # Execute tools
             for tc in tool_calls:
+                input_summary = self._summarize_tool_input(tc.tool_name, tc.tool_input)
+                trace.append(f"Tool `{tc.tool_name}`: {input_summary}")
+
                 try:
                     result = await self._tools.execute(tc.tool_name, tc.tool_input, session)
                     result_str = result if isinstance(result, str) else json.dumps(result)
                 except Exception as e:
                     result_str = f"Error: {e}"
 
-                # Add tool result to session
                 session.add_message(Message(
                     role=MessageRole.TOOL,
                     content=result_str,
@@ -103,29 +133,15 @@ class LLMAgent:
                     metadata={"tool_call_id": tc.tool_call_id},
                 ))
 
-                yield f"\n[Tool: {tc.tool_name}] "
-
-            # Continue conversation with tool results
-            follow_up_messages = self._build_messages(session)
-
-            async for chunk in self._transport.complete(
-                messages=follow_up_messages,
-                tools=tools,
-                model=self._model,
-                max_tokens=self._max_tokens,
-                temperature=self._temperature,
-                system=self._system_prompt,
-            ):
-                if chunk.type == StreamChunkType.TEXT_DELTA:
-                    full_response += chunk.data
-                    yield chunk.data
-        else:
-            # No tool calls — save the assistant response
-            session.add_message(Message(
-                role=MessageRole.ASSISTANT,
-                content=full_response,
-                session_id=session.id,
-            ))
+        # Append trace summary after the response
+        steps = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(trace))
+        history_count = len(session.history)
+        yield (
+            f"\n\n---\n"
+            f"{steps}\n"
+            f"  History: {history_count} msgs | "
+            f"Total: {total_input_tokens} in / {total_output_tokens} out"
+        )
 
     def _build_anthropic_tool_messages(self, session: Session) -> list[dict]:
         """Build messages with tool use/results in Anthropic format."""
@@ -155,6 +171,17 @@ class LLMAgent:
             else:
                 messages.append(msg.to_llm_dict())
         return messages
+
+    @staticmethod
+    def _summarize_tool_input(tool_name: str, tool_input: dict) -> str:
+        """Create a brief human-readable summary of a tool invocation."""
+        if tool_name == "shell":
+            return f"`{tool_input.get('command', '')}`"
+        elif tool_name == "web_fetch":
+            return tool_input.get("url", "")
+        else:
+            args = ", ".join(f"{k}={v!r}" for k, v in tool_input.items())
+            return args[:150]
 
     def _build_openai_tool_messages(self, session: Session) -> list[dict]:
         """Build messages with tool use/results in OpenAI format."""

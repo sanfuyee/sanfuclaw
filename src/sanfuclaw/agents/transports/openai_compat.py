@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import logging
 from typing import Any, AsyncIterator
 
-from openai import AsyncOpenAI
+from openai import APIError, APIConnectionError, AsyncOpenAI
 
 from sanfuclaw.core.types import StreamChunkType
 
 from .base import StreamChunk
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAICompatTransport:
@@ -47,6 +51,7 @@ class OpenAICompatTransport:
             "messages": all_messages,
             "temperature": temperature,
             "stream": True,
+            "stream_options": {"include_usage": True},
         }
 
         # Convert tool schemas from Anthropic format to OpenAI format if needed
@@ -63,11 +68,28 @@ class OpenAICompatTransport:
                 })
             kwargs["tools"] = openai_tools
 
-        stream = await self._client.chat.completions.create(**kwargs)
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                stream = await self._client.chat.completions.create(**kwargs)
+                break
+            except (APIError, APIConnectionError) as e:
+                if attempt < max_retries - 1:
+                    wait = 2 ** attempt
+                    logger.warning(f"LLM API error (attempt {attempt + 1}/{max_retries}), retrying in {wait}s: {e}")
+                    await asyncio.sleep(wait)
+                else:
+                    raise
 
         tool_calls_accumulator: dict[int, dict] = {}
 
+        last_usage = None
+
         async for chunk in stream:
+            # Track latest usage (HPC-AI sends it on every chunk; we only want the final one)
+            if hasattr(chunk, "usage") and chunk.usage:
+                last_usage = chunk.usage
+
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
@@ -114,3 +136,11 @@ class OpenAICompatTransport:
                         tool_input=tool_input,
                     )
                 yield StreamChunk(type=StreamChunkType.STOP)
+
+        # Emit final usage after stream ends
+        if last_usage:
+            yield StreamChunk(
+                type=StreamChunkType.USAGE,
+                input_tokens=last_usage.prompt_tokens or 0,
+                output_tokens=last_usage.completion_tokens or 0,
+            )
