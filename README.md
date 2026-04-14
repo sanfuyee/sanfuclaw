@@ -203,6 +203,45 @@ url = "https://example.com/mcp/sse"
 Install the extra: `pip install -e ".[mcp]"`. Tools appear in the registry
 as `mcp_<server>_<tool>`.
 
+#### Recommended servers
+
+Zero-auth official reference servers — copy any of these into your
+`sanfuclaw.toml` under `[mcp.servers.<name>]`:
+
+```toml
+# Sandboxed filesystem access (reads/writes under the given directory)
+[mcp.servers.filesystem]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+
+# Structured git operations (log, diff, blame, show) — requires `uvx`
+[mcp.servers.git]
+command = "uvx"
+args = ["mcp-server-git", "--repository", "."]
+
+# Timezone-aware current time — fixes "what's today's date" confusion
+[mcp.servers.time]
+command = "uvx"
+args = ["mcp-server-time"]
+
+# Structured step-by-step reasoning tool — boosts hard-problem solving
+[mcp.servers.sequential-thinking]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+
+# Fetch URLs with robots.txt handling + markdown conversion
+[mcp.servers.fetch]
+command = "uvx"
+args = ["mcp-server-fetch"]
+```
+
+Servers needing API keys or tokens (add `env = { KEY = "..." }` or export
+the variable before starting sanfuclaw):
+
+- **github** — `npx @modelcontextprotocol/server-github` (needs `GITHUB_TOKEN`)
+- **exa** / **brave-search** — web search (needs API key)
+- **playwright** — `npx @playwright/mcp` — real browser automation
+
 ### API Endpoints
 
 | Endpoint | Description |
