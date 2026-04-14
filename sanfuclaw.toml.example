@@ -25,3 +25,57 @@ port = 18789
 # [channels.discord]
 # type = "discord"
 # bot_token = ""
+
+# Skills — markdown files with frontmatter, discovered on startup.
+# The LLM sees a `name: description` summary and calls `load_skill`
+# lazily when a request matches.
+[skills]
+dir = "./skills"
+
+# MCP (Model Context Protocol) servers.
+# Install the extra first:  pip install -e ".[mcp]"
+# Each server is either spawned over stdio (command/args/env) or
+# reached over SSE (url). Tools get registered as `mcp_<server>_<tool>`
+# and are called by the LLM exactly like built-in tools.
+#
+# Zero-auth official reference servers — uncomment any you want.
+
+# Sandboxed filesystem access (reads/writes under the given directory)
+# [mcp.servers.filesystem]
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+
+# Structured git operations (log, diff, blame, show) — needs `uv` installed
+# [mcp.servers.git]
+# command = "uvx"
+# args = ["mcp-server-git", "--repository", "."]
+
+# Timezone-aware current time — fixes "what's today's date" confusion
+# [mcp.servers.time]
+# command = "uvx"
+# args = ["mcp-server-time"]
+
+# Structured step-by-step reasoning tool
+# [mcp.servers.sequential-thinking]
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+
+# URL fetcher with robots.txt handling + markdown conversion
+# [mcp.servers.fetch]
+# command = "uvx"
+# args = ["mcp-server-fetch"]
+
+# Servers that need an API key or token — pass secrets via `env`:
+# [mcp.servers.github]
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-github"]
+# env = { GITHUB_PERSONAL_ACCESS_TOKEN = "ghp_xxx" }
+
+# Remote MCP server over SSE:
+# [mcp.servers.remote]
+# url = "https://mcp.example.com/sse"
+
+# Any server can be temporarily disabled without removing its config:
+# [mcp.servers.some-name]
+# enabled = false
+# command = "..."
