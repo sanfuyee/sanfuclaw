@@ -32,6 +32,7 @@ class GatewayServer:
         self.session_manager: SessionManager | None = None
         self._router = None
         self._active_connections: dict[str, WebSocket] = {}
+        self._mcp_manager = None
         self.app = self._create_app()
 
     def _create_app(self) -> FastAPI:
@@ -45,6 +46,8 @@ class GatewayServer:
             logger.info(f"Gateway started on {self.settings.gateway.host}:{self.settings.gateway.port}")
             yield
             # Shutdown
+            if self._mcp_manager:
+                await self._mcp_manager.stop()
             if self.store:
                 await self.store.close()
 
@@ -125,19 +128,34 @@ class GatewayServer:
         """Set up the agent router."""
         from sanfuclaw.agents.llm_agent import LLMAgent
         from sanfuclaw.gateway.router import Router
+        from sanfuclaw.mcp_client.manager import MCPManager
+        from sanfuclaw.mcp_client.tool_adapter import MCPToolAdapter
+        from sanfuclaw.skills.registry import SkillRegistry
         from sanfuclaw.tools.registry import ToolRegistry
         from sanfuclaw.tools.shell import ShellTool
+        from sanfuclaw.tools.skill_loader import LoadSkillTool
         from sanfuclaw.tools.web_fetch import WebFetchTool
+
+        skill_registry = SkillRegistry(self.settings.skills.dir)
 
         tool_registry = ToolRegistry()
         tool_registry.register(ShellTool())
         tool_registry.register(WebFetchTool())
+        if len(skill_registry) > 0:
+            tool_registry.register(LoadSkillTool(skill_registry))
+
+        self._mcp_manager = MCPManager(self.settings.mcp.servers)
+        await self._mcp_manager.start()
+        for server_name, mcp_tool in self._mcp_manager.tools():
+            session = self._mcp_manager.get_session(server_name)
+            tool_registry.register(MCPToolAdapter(server_name, mcp_tool, session))
 
         transport = self._build_transport()
         agent = LLMAgent(
             name="default",
             transport=transport,
             tool_registry=tool_registry,
+            skill_registry=skill_registry,
             system_prompt=self.settings.llm.system_prompt,
             model=self.settings.llm.model,
             max_tokens=self.settings.llm.max_tokens,

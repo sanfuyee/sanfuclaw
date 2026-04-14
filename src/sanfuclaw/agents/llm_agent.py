@@ -10,6 +10,7 @@ from sanfuclaw.core.session import Session
 from sanfuclaw.core.types import MessageRole, StreamChunkType
 
 from .transports.base import LLMTransport, StreamChunk
+from sanfuclaw.skills.registry import SkillRegistry
 from sanfuclaw.tools.registry import ToolRegistry
 
 
@@ -21,6 +22,7 @@ class LLMAgent:
         name: str,
         transport: LLMTransport,
         tool_registry: ToolRegistry | None = None,
+        skill_registry: SkillRegistry | None = None,
         system_prompt: str = "You are a helpful personal AI assistant called Sanfuclaw.",
         model: str | None = None,
         max_tokens: int = 4096,
@@ -30,6 +32,9 @@ class LLMAgent:
         self.name = name
         self._transport = transport
         self._tools = tool_registry or ToolRegistry()
+        self._skills = skill_registry
+        if skill_registry and len(skill_registry) > 0:
+            system_prompt = system_prompt + "\n" + skill_registry.system_prompt_block()
         self._system_prompt = system_prompt
         self._model = model
         self._max_tokens = max_tokens

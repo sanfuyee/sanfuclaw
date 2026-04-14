@@ -53,8 +53,12 @@ async def _run(config_path: str, model: str | None, provider: str | None, channe
     from sanfuclaw.gateway.router import Router
     from sanfuclaw.gateway.session_manager import SessionManager
     from sanfuclaw.storage.sqlite import SQLiteStore
+    from sanfuclaw.mcp_client.manager import MCPManager
+    from sanfuclaw.mcp_client.tool_adapter import MCPToolAdapter
+    from sanfuclaw.skills.registry import SkillRegistry
     from sanfuclaw.tools.registry import ToolRegistry
     from sanfuclaw.tools.shell import ShellTool
+    from sanfuclaw.tools.skill_loader import LoadSkillTool
     from sanfuclaw.tools.web_fetch import WebFetchTool
 
     # Load config
@@ -70,10 +74,26 @@ async def _run(config_path: str, model: str | None, provider: str | None, channe
 
     session_manager = SessionManager(store)
 
+    # Set up skills
+    skill_registry = SkillRegistry(settings.skills.dir)
+    if len(skill_registry) > 0:
+        console.print(f"[dim]Loaded {len(skill_registry)} skill(s) from {settings.skills.dir}[/dim]")
+
     # Set up tools
     tool_registry = ToolRegistry()
     tool_registry.register(ShellTool())
     tool_registry.register(WebFetchTool())
+    if len(skill_registry) > 0:
+        tool_registry.register(LoadSkillTool(skill_registry))
+
+    # Set up MCP servers — start and register their tools
+    mcp_manager = MCPManager(settings.mcp.servers)
+    await mcp_manager.start()
+    for server_name, mcp_tool in mcp_manager.tools():
+        session = mcp_manager.get_session(server_name)
+        tool_registry.register(MCPToolAdapter(server_name, mcp_tool, session))
+    if mcp_manager.tools():
+        console.print(f"[dim]Loaded {len(mcp_manager.tools())} MCP tool(s)[/dim]")
 
     # Set up transport and agent
     transport = _build_transport(settings)
@@ -81,6 +101,7 @@ async def _run(config_path: str, model: str | None, provider: str | None, channe
         name="default",
         transport=transport,
         tool_registry=tool_registry,
+        skill_registry=skill_registry,
         system_prompt=settings.llm.system_prompt,
         model=settings.llm.model,
         max_tokens=settings.llm.max_tokens,
@@ -158,6 +179,7 @@ async def _run(config_path: str, model: str | None, provider: str | None, channe
     finally:
         for ch in channels:
             await ch.stop()
+        await mcp_manager.stop()
         await store.close()
 
 
