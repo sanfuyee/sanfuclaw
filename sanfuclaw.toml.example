@@ -38,6 +38,12 @@ dir = "./skills"
 # reached over SSE (url). Tools get registered as `mcp_<server>_<tool>`
 # and are called by the LLM exactly like built-in tools.
 #
+# ⚠ Every enabled server adds its tool schemas to the LLM request on
+#   *every* turn — filesystem alone is ~2.5k input tokens, all five
+#   recommended servers together are ~5k tokens/turn. Prompt caching
+#   (enabled by default for Anthropic) drops repeat turns to ~10% of
+#   that. Still: enable only what you need for a given session.
+#
 # Zero-auth official reference servers — uncomment any you want.
 
 # Sandboxed filesystem access (reads/writes under the given directory)

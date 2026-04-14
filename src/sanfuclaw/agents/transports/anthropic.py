@@ -36,10 +36,24 @@ class AnthropicTransport:
             "messages": messages,
             "temperature": temperature,
         }
+
+        # Prompt caching — mark the large, stable prefixes (system prompt and
+        # the tools block) as cacheable so repeat turns pay ~10% instead of 100%
+        # for those tokens. Anthropic applies the cache boundary at the last
+        # block carrying `cache_control`.
         if system:
-            kwargs["system"] = system
+            kwargs["system"] = [{
+                "type": "text",
+                "text": system,
+                "cache_control": {"type": "ephemeral"},
+            }]
         if tools:
-            kwargs["tools"] = tools
+            cached_tools = [dict(t) for t in tools]
+            cached_tools[-1] = {
+                **cached_tools[-1],
+                "cache_control": {"type": "ephemeral"},
+            }
+            kwargs["tools"] = cached_tools
 
         async with self._client.messages.stream(**kwargs) as stream:
             async for event in stream:
@@ -75,3 +89,16 @@ class AnthropicTransport:
                             tool_call_id=block.id,
                             tool_input=block.input,
                         )
+
+            # Emit a single USAGE chunk so the agent's trace can show token
+            # counts (and how many came from cache).
+            usage = getattr(response, "usage", None)
+            if usage is not None:
+                input_tokens = getattr(usage, "input_tokens", 0) or 0
+                cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
+                cache_create = getattr(usage, "cache_creation_input_tokens", 0) or 0
+                yield StreamChunk(
+                    type=StreamChunkType.USAGE,
+                    input_tokens=input_tokens + cache_read + cache_create,
+                    output_tokens=getattr(usage, "output_tokens", 0) or 0,
+                )

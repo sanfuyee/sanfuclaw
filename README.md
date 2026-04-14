@@ -242,6 +242,33 @@ the variable before starting sanfuclaw):
 - **exa** / **brave-search** — web search (needs API key)
 - **playwright** — `npx @playwright/mcp` — real browser automation
 
+#### Enable only what you need
+
+Every registered MCP tool becomes part of the `tools=` payload sent on
+**every** LLM turn — not just the turn where it gets called. As a rough
+guide: `filesystem` alone adds ~2.5k input tokens per call, `git` adds
+~2k, and enabling all five recommended servers costs ~5k tokens on every
+round of every conversation.
+
+Mitigations:
+
+1. **Enable only the servers you actually use for a given session.**
+   Any server can be temporarily disabled without removing its config:
+   ```toml
+   [mcp.servers.filesystem]
+   enabled = false
+   command = "npx"
+   args = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+   ```
+2. **Prompt caching is on by default for Anthropic.** The system prompt
+   and the entire tools block are marked `cache_control: ephemeral`, so
+   repeat turns pay ~10% of the nominal token cost for that prefix. A
+   conversation that would have cost 5k tokens/turn for tools drops to
+   ~500/turn after the first hit.
+3. **OpenAI-compatible providers** (HPC-AI, etc.) generally apply prompt
+   caching automatically on stable prefixes — no code changes needed,
+   but check your provider's docs to confirm.
+
 ### API Endpoints
 
 | Endpoint | Description |
