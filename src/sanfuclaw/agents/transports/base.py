@@ -20,6 +20,7 @@ class StreamChunk:
     # Token usage (populated on USAGE chunks)
     input_tokens: int = 0
     output_tokens: int = 0
+    cached_tokens: int = 0  # subset of input_tokens read from prompt cache
 
 
 class LLMTransport(Protocol):

@@ -90,15 +90,19 @@ class AnthropicTransport:
                             tool_input=block.input,
                         )
 
-            # Emit a single USAGE chunk so the agent's trace can show token
-            # counts (and how many came from cache).
+            # Emit a single USAGE chunk. Anthropic reports the fresh prompt
+            # prefix (input_tokens), cache creation, and cache reads as three
+            # separate counters. Sum them into input_tokens for the billed
+            # total; keep cache_read as `cached_tokens` so the trace can show
+            # how much was served from cache.
             usage = getattr(response, "usage", None)
             if usage is not None:
-                input_tokens = getattr(usage, "input_tokens", 0) or 0
+                fresh = getattr(usage, "input_tokens", 0) or 0
                 cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
                 cache_create = getattr(usage, "cache_creation_input_tokens", 0) or 0
                 yield StreamChunk(
                     type=StreamChunkType.USAGE,
-                    input_tokens=input_tokens + cache_read + cache_create,
+                    input_tokens=fresh + cache_read + cache_create,
                     output_tokens=getattr(usage, "output_tokens", 0) or 0,
+                    cached_tokens=cache_read,
                 )

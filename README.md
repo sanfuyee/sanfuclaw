@@ -265,9 +265,12 @@ Mitigations:
    repeat turns pay ~10% of the nominal token cost for that prefix. A
    conversation that would have cost 5k tokens/turn for tools drops to
    ~500/turn after the first hit.
-3. **OpenAI-compatible providers** (HPC-AI, etc.) generally apply prompt
-   caching automatically on stable prefixes — no code changes needed,
-   but check your provider's docs to confirm.
+3. **OpenAI-compatible providers** (OpenAI, DeepSeek, Moonshot/Kimi, etc.)
+   apply prompt caching automatically — there is no request-side flag.
+   The transport reads cache-hit counts from the common usage-response
+   fields (`prompt_tokens_details.cached_tokens`, `prompt_cache_hit_tokens`,
+   `cached_tokens`) and surfaces them in the per-turn trace, so you can
+   see caching kick in as `(N cached)` next to the input token count.
 
 ### API Endpoints
 

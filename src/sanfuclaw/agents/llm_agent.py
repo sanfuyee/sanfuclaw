@@ -74,6 +74,7 @@ class LLMAgent:
 
         total_input_tokens = 0
         total_output_tokens = 0
+        total_cached_tokens = 0
         trace: list[str] = []  # collect step info for final summary
         max_tool_rounds = 5
 
@@ -85,6 +86,7 @@ class LLMAgent:
             tool_calls: list[StreamChunk] = []
             step_input = 0
             step_output = 0
+            step_cached = 0
 
             async for chunk in self._stream_llm(messages, tools):
                 if chunk.type == StreamChunkType.TEXT_DELTA:
@@ -95,10 +97,13 @@ class LLMAgent:
                 elif chunk.type == StreamChunkType.USAGE:
                     step_input = chunk.input_tokens
                     step_output = chunk.output_tokens
+                    step_cached = chunk.cached_tokens
                     total_input_tokens += step_input
                     total_output_tokens += step_output
+                    total_cached_tokens += step_cached
 
-            trace.append(f"{step_label}: {step_input} in / {step_output} out")
+            cache_note = f" ({step_cached} cached)" if step_cached else ""
+            trace.append(f"{step_label}: {step_input} in / {step_output} out{cache_note}")
 
             if not tool_calls:
                 # Save only the LLM's actual response, not the trace
@@ -141,11 +146,12 @@ class LLMAgent:
         # Append trace summary after the response
         steps = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(trace))
         history_count = len(session.history)
+        cache_total = f" ({total_cached_tokens} cached)" if total_cached_tokens else ""
         yield (
             f"\n\n---\n"
             f"{steps}\n"
             f"  History: {history_count} msgs | "
-            f"Total: {total_input_tokens} in / {total_output_tokens} out"
+            f"Total: {total_input_tokens} in / {total_output_tokens} out{cache_total}"
         )
 
     def _build_anthropic_tool_messages(self, session: Session) -> list[dict]:

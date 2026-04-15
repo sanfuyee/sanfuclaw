@@ -137,10 +137,31 @@ class OpenAICompatTransport:
                     )
                 yield StreamChunk(type=StreamChunkType.STOP)
 
-        # Emit final usage after stream ends
+        # Emit final usage after stream ends.
+        #
+        # OpenAI-compatible providers apply prompt caching *automatically* —
+        # there is no request-side flag. What varies is how (and whether) the
+        # usage response reports cache hits. We try the common field names:
+        #
+        #   OpenAI / Azure:  usage.prompt_tokens_details.cached_tokens
+        #   DeepSeek:        usage.prompt_cache_hit_tokens
+        #   Moonshot / Kimi: usage.cached_tokens
+        #
+        # Billed prompt_tokens already reflects caching, so we leave input_tokens
+        # alone and surface cached_tokens separately for visibility in the trace.
         if last_usage:
+            cached = 0
+            details = getattr(last_usage, "prompt_tokens_details", None)
+            if details is not None:
+                cached = getattr(details, "cached_tokens", 0) or 0
+            if not cached:
+                cached = getattr(last_usage, "prompt_cache_hit_tokens", 0) or 0
+            if not cached:
+                cached = getattr(last_usage, "cached_tokens", 0) or 0
+
             yield StreamChunk(
                 type=StreamChunkType.USAGE,
                 input_tokens=last_usage.prompt_tokens or 0,
                 output_tokens=last_usage.completion_tokens or 0,
+                cached_tokens=cached,
             )
