@@ -22,9 +22,11 @@ def start(
     model: str = typer.Option(None, "--model", "-m", help="Override LLM model"),
     provider: str = typer.Option(None, "--provider", "-p", help="Override LLM provider"),
     channel: str = typer.Option("cli", "--channel", help="Channel to run (cli, telegram, weixin, all)"),
+    resume: str = typer.Option(None, "--resume", "-r", help="Resume a session by ID (prefix match supported)"),
+    new: bool = typer.Option(False, "--new", "-n", help="Start a new session instead of resuming the last one"),
 ):
     """Start the Sanfuclaw agent."""
-    asyncio.run(_run(config, model, provider, channel))
+    asyncio.run(_run(config, model, provider, channel, resume=resume, new_session=new))
 
 
 def _build_transport(settings):
@@ -46,7 +48,14 @@ def _build_transport(settings):
         )
 
 
-async def _run(config_path: str, model: str | None, provider: str | None, channel_mode: str):
+async def _run(
+    config_path: str,
+    model: str | None,
+    provider: str | None,
+    channel_mode: str,
+    resume: str | None = None,
+    new_session: bool = False,
+):
     """Main async entry point."""
     from sanfuclaw.core.config import Settings
     from sanfuclaw.agents.llm_agent import LLMAgent
@@ -117,7 +126,22 @@ async def _run(config_path: str, model: str | None, provider: str | None, channe
 
     if channel_mode in ("cli", "all"):
         from sanfuclaw.channels.cli_channel import CLIChannel
-        cli = CLIChannel()
+
+        # Resolve session for CLI
+        cli_session_id = "cli-session"
+        if resume:
+            resolved = await _resolve_session(store, resume)
+            if not resolved:
+                console.print(f"[red]Error:[/red] No session matching '{resume}'")
+                raise typer.Exit(1)
+            cli_session_id = resolved.id
+            console.print(f"[dim]Resuming session {resolved.id[:8]}… ({len(resolved.history)} messages)[/dim]")
+        elif new_session:
+            import uuid
+            cli_session_id = f"cli-{uuid.uuid4().hex[:8]}"
+            console.print(f"[dim]Starting new session {cli_session_id}[/dim]")
+
+        cli = CLIChannel(session_id=cli_session_id)
         router.register_channel(cli)
         channels.append(cli)
 
@@ -180,6 +204,77 @@ async def _run(config_path: str, model: str | None, provider: str | None, channe
         for ch in channels:
             await ch.stop()
         await mcp_manager.stop()
+        await store.close()
+
+
+async def _resolve_session(store, session_id_prefix: str):
+    """Resolve a session by exact or prefix match on its ID."""
+    from sanfuclaw.core.session import Session
+
+    # Try exact match first
+    session = await store.get_session(session_id_prefix)
+    if session:
+        return session
+
+    # Try prefix match via list
+    all_sessions = await store.list_sessions(limit=100)
+    matches = [s for s in all_sessions if s["id"].startswith(session_id_prefix)]
+    if len(matches) == 1:
+        return await store.get_session(matches[0]["id"])
+    if len(matches) > 1:
+        console.print(f"[yellow]Ambiguous prefix '{session_id_prefix}', matches {len(matches)} sessions:[/yellow]")
+        for s in matches[:5]:
+            console.print(f"  {s['id'][:8]}  {s['channel_id']}  {s['updated_at']}")
+        return None
+    return None
+
+
+@app.command()
+def sessions(
+    config: str = typer.Option("sanfuclaw.toml", "--config", "-c", help="Path to config file"),
+    limit: int = typer.Option(10, "--limit", "-n", help="Number of sessions to show"),
+    channel_filter: str = typer.Option(None, "--channel", help="Filter by channel"),
+):
+    """List recent sessions."""
+    asyncio.run(_list_sessions(config, limit, channel_filter))
+
+
+async def _list_sessions(config_path: str, limit: int, channel_filter: str | None):
+    from rich.table import Table
+    from sanfuclaw.storage.sqlite import SQLiteStore
+
+    store = SQLiteStore()
+    await store.init()
+    try:
+        rows = await store.list_sessions(channel_id=channel_filter, limit=limit)
+        if not rows:
+            console.print("[dim]No sessions found.[/dim]")
+            return
+
+        table = Table(title="Recent Sessions")
+        table.add_column("ID", style="cyan", no_wrap=True)
+        table.add_column("Channel", style="green")
+        table.add_column("Updated", style="yellow")
+        table.add_column("Msgs", justify="right")
+        table.add_column("Last Message", max_width=50)
+
+        for row in rows:
+            last_msg = row["last_message"]
+            if len(last_msg) > 50:
+                last_msg = last_msg[:47] + "..."
+            # Replace newlines for display
+            last_msg = last_msg.replace("\n", " ")
+            table.add_row(
+                row["id"][:8],
+                row["channel_id"],
+                row["updated_at"][:19],
+                str(row["message_count"]),
+                last_msg,
+            )
+
+        console.print(table)
+        console.print(f"\n[dim]Resume with:[/dim] sanfuclaw start --resume <ID>")
+    finally:
         await store.close()
 
 

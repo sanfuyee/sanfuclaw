@@ -32,3 +32,9 @@ class Store(Protocol):
     async def find_session(self, channel_id: str, sender_id: str) -> Session | None:
         """Find an existing session by channel + sender."""
         ...
+
+    async def list_sessions(
+        self, channel_id: str | None = None, limit: int = 20
+    ) -> list[dict]:
+        """List recent sessions with summary info (id, channel, updated_at, message_count, last_message)."""
+        ...

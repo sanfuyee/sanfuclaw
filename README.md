@@ -9,7 +9,7 @@ A local-first personal AI agent inspired by [OpenClaw](https://github.com/opencl
 - **Tool system**: Shell commands, web fetch, extensible tool registry
 - **Skill plugins**: Markdown-based skills with frontmatter, lazy-loaded on demand
 - **MCP support**: Connect to any Model Context Protocol server over stdio or SSE
-- **Persistent sessions**: SQLite-backed conversation history
+- **Persistent sessions**: SQLite-backed conversation history with list/resume support
 - **Gateway server**: FastAPI with WebSocket streaming, REST API, WebChat UI
 - **Event hooks**: Pluggable event system for custom integrations
 - **Streaming-first**: Real-time response streaming across all channels
@@ -65,6 +65,13 @@ python -m sanfuclaw start --channel all
 
 # Gateway server (WebChat + REST API + WebSocket)
 python -m sanfuclaw serve
+
+# Session management
+python -m sanfuclaw sessions              # List recent sessions
+python -m sanfuclaw sessions -n 20        # Show more sessions
+python -m sanfuclaw sessions --channel cli # Filter by channel
+python -m sanfuclaw start --resume <ID>   # Resume a session (prefix match)
+python -m sanfuclaw start --new           # Force a new session
 ```
 
 ## Architecture

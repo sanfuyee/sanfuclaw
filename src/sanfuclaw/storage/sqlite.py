@@ -113,6 +113,52 @@ class SQLiteStore:
         )
         await db.commit()
 
+    async def list_sessions(
+        self, channel_id: str | None = None, limit: int = 20
+    ) -> list[dict]:
+        """List recent sessions with summary info."""
+        db = self._ensure_db()
+        if channel_id:
+            query = """
+                SELECT s.id, s.channel_id, s.sender_id, s.created_at, s.updated_at,
+                       COUNT(m.id) as message_count,
+                       (SELECT content FROM messages m2
+                        WHERE m2.session_id = s.id ORDER BY m2.timestamp DESC LIMIT 1) as last_message
+                FROM sessions s
+                LEFT JOIN messages m ON m.session_id = s.id
+                WHERE s.channel_id = ?
+                GROUP BY s.id
+                ORDER BY s.updated_at DESC LIMIT ?
+            """
+            params: tuple = (channel_id, limit)
+        else:
+            query = """
+                SELECT s.id, s.channel_id, s.sender_id, s.created_at, s.updated_at,
+                       COUNT(m.id) as message_count,
+                       (SELECT content FROM messages m2
+                        WHERE m2.session_id = s.id ORDER BY m2.timestamp DESC LIMIT 1) as last_message
+                FROM sessions s
+                LEFT JOIN messages m ON m.session_id = s.id
+                GROUP BY s.id
+                ORDER BY s.updated_at DESC LIMIT ?
+            """
+            params = (limit,)
+
+        async with db.execute(query, params) as cursor:
+            rows = await cursor.fetchall()
+            return [
+                {
+                    "id": row[0],
+                    "channel_id": row[1],
+                    "sender_id": row[2],
+                    "created_at": row[3],
+                    "updated_at": row[4],
+                    "message_count": row[5],
+                    "last_message": row[6] or "",
+                }
+                for row in rows
+            ]
+
     async def get_history(self, session_id: str, limit: int = 50) -> list[Message]:
         db = self._ensure_db()
         async with db.execute(
