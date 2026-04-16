@@ -82,7 +82,7 @@ class OpenAICompatTransport:
                     raise
 
         tool_calls_accumulator: dict[int, dict] = {}
-        reasoning_started = False
+        reasoning_token_count = 0
 
         last_usage = None
 
@@ -96,27 +96,13 @@ class OpenAICompatTransport:
             delta = chunk.choices[0].delta
 
             # Reasoning content (Kimi, DeepSeek-R1, QwQ, etc.)
+            # Silently count — these are internal thinking tokens, not user-facing.
             reasoning = getattr(delta, "reasoning_content", None)
             if reasoning:
-                if not reasoning_started:
-                    reasoning_started = True
-                    yield StreamChunk(
-                        type=StreamChunkType.TEXT_DELTA,
-                        data="<thinking>\n",
-                    )
-                yield StreamChunk(
-                    type=StreamChunkType.TEXT_DELTA,
-                    data=reasoning,
-                )
+                reasoning_token_count += 1  # approximate: 1 chunk ≈ 1 token
 
             # Text content
             if delta.content:
-                if reasoning_started:
-                    reasoning_started = False
-                    yield StreamChunk(
-                        type=StreamChunkType.TEXT_DELTA,
-                        data="\n</thinking>\n\n",
-                    )
                 yield StreamChunk(
                     type=StreamChunkType.TEXT_DELTA,
                     data=delta.content,
@@ -180,9 +166,18 @@ class OpenAICompatTransport:
             if not cached:
                 cached = getattr(last_usage, "cached_tokens", 0) or 0
 
+            # Reasoning tokens: prefer the provider's count, fall back to our chunk count
+            reasoning = 0
+            completion_details = getattr(last_usage, "completion_tokens_details", None)
+            if completion_details is not None:
+                reasoning = getattr(completion_details, "reasoning_tokens", 0) or 0
+            if not reasoning:
+                reasoning = reasoning_token_count
+
             yield StreamChunk(
                 type=StreamChunkType.USAGE,
                 input_tokens=last_usage.prompt_tokens or 0,
                 output_tokens=last_usage.completion_tokens or 0,
                 cached_tokens=cached,
+                reasoning_tokens=reasoning,
             )

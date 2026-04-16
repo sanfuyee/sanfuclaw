@@ -75,8 +75,10 @@ class LLMAgent:
         total_input_tokens = 0
         total_output_tokens = 0
         total_cached_tokens = 0
+        total_reasoning_tokens = 0
         trace: list[str] = []  # collect step info for final summary
         max_tool_rounds = 5
+        exhausted = False
 
         for round_num in range(max_tool_rounds + 1):
             messages = self._build_messages(session)
@@ -87,6 +89,7 @@ class LLMAgent:
             step_input = 0
             step_output = 0
             step_cached = 0
+            step_reasoning = 0
 
             async for chunk in self._stream_llm(messages, tools):
                 if chunk.type == StreamChunkType.TEXT_DELTA:
@@ -98,12 +101,19 @@ class LLMAgent:
                     step_input = chunk.input_tokens
                     step_output = chunk.output_tokens
                     step_cached = chunk.cached_tokens
+                    step_reasoning = chunk.reasoning_tokens
                     total_input_tokens += step_input
                     total_output_tokens += step_output
                     total_cached_tokens += step_cached
+                    total_reasoning_tokens += step_reasoning
 
-            cache_note = f" ({step_cached} cached)" if step_cached else ""
-            trace.append(f"{step_label}: {step_input} in / {step_output} out{cache_note}")
+            notes = []
+            if step_cached:
+                notes.append(f"{step_cached} cached")
+            if step_reasoning:
+                notes.append(f"{step_reasoning} reasoning")
+            note_str = f" ({', '.join(notes)})" if notes else ""
+            trace.append(f"{step_label}: {step_input} in / {step_output} out{note_str}")
 
             if not tool_calls:
                 # Save only the LLM's actual response, not the trace
@@ -142,16 +152,31 @@ class LLMAgent:
                     session_id=session.id,
                     metadata={"tool_call_id": tc.tool_call_id},
                 ))
+        else:
+            # for-loop exhausted without break — tool rounds used up
+            exhausted = True
+            notice = f"\n\n[Reached max tool rounds ({max_tool_rounds}). Send another message to continue.]"
+            yield notice
+            session.add_message(Message(
+                role=MessageRole.ASSISTANT,
+                content=full_response + notice,
+                session_id=session.id,
+            ))
 
         # Append trace summary after the response
         steps = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(trace))
         history_count = len(session.history)
-        cache_total = f" ({total_cached_tokens} cached)" if total_cached_tokens else ""
+        totals = []
+        if total_cached_tokens:
+            totals.append(f"{total_cached_tokens} cached")
+        if total_reasoning_tokens:
+            totals.append(f"{total_reasoning_tokens} reasoning")
+        totals_str = f" ({', '.join(totals)})" if totals else ""
         yield (
             f"\n\n---\n"
             f"{steps}\n"
             f"  History: {history_count} msgs | "
-            f"Total: {total_input_tokens} in / {total_output_tokens} out{cache_total}"
+            f"Total: {total_input_tokens} in / {total_output_tokens} out{totals_str}"
         )
 
     def _build_anthropic_tool_messages(self, session: Session) -> list[dict]:

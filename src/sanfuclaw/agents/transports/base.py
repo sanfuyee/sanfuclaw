@@ -21,6 +21,7 @@ class StreamChunk:
     input_tokens: int = 0
     output_tokens: int = 0
     cached_tokens: int = 0  # subset of input_tokens read from prompt cache
+    reasoning_tokens: int = 0  # reasoning/thinking tokens (subset of output_tokens)
 
 
 class LLMTransport(Protocol):
