@@ -82,6 +82,7 @@ class OpenAICompatTransport:
                     raise
 
         tool_calls_accumulator: dict[int, dict] = {}
+        reasoning_started = False
 
         last_usage = None
 
@@ -94,8 +95,28 @@ class OpenAICompatTransport:
                 continue
             delta = chunk.choices[0].delta
 
+            # Reasoning content (Kimi, DeepSeek-R1, QwQ, etc.)
+            reasoning = getattr(delta, "reasoning_content", None)
+            if reasoning:
+                if not reasoning_started:
+                    reasoning_started = True
+                    yield StreamChunk(
+                        type=StreamChunkType.TEXT_DELTA,
+                        data="<thinking>\n",
+                    )
+                yield StreamChunk(
+                    type=StreamChunkType.TEXT_DELTA,
+                    data=reasoning,
+                )
+
             # Text content
             if delta.content:
+                if reasoning_started:
+                    reasoning_started = False
+                    yield StreamChunk(
+                        type=StreamChunkType.TEXT_DELTA,
+                        data="\n</thinking>\n\n",
+                    )
                 yield StreamChunk(
                     type=StreamChunkType.TEXT_DELTA,
                     data=delta.content,
