@@ -264,8 +264,11 @@ async def _list_sessions(config_path: str, limit: int, channel_filter: str | Non
                 last_msg = last_msg[:47] + "..."
             # Replace newlines for display
             last_msg = last_msg.replace("\n", " ")
+            # Short IDs (e.g. "cli-session") display in full; UUIDs truncate to 8
+            raw_id = row["id"]
+            display_id = raw_id if len(raw_id) <= 16 else raw_id[:8]
             table.add_row(
-                row["id"][:8],
+                display_id,
                 row["channel_id"],
                 row["updated_at"][:19],
                 str(row["message_count"]),

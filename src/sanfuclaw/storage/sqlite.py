@@ -123,7 +123,8 @@ class SQLiteStore:
                 SELECT s.id, s.channel_id, s.sender_id, s.created_at, s.updated_at,
                        COUNT(m.id) as message_count,
                        (SELECT content FROM messages m2
-                        WHERE m2.session_id = s.id ORDER BY m2.timestamp DESC LIMIT 1) as last_message
+                        WHERE m2.session_id = s.id AND m2.content != '' AND m2.role IN ('user', 'assistant')
+                        ORDER BY m2.timestamp DESC LIMIT 1) as last_message
                 FROM sessions s
                 LEFT JOIN messages m ON m.session_id = s.id
                 WHERE s.channel_id = ?
@@ -136,7 +137,8 @@ class SQLiteStore:
                 SELECT s.id, s.channel_id, s.sender_id, s.created_at, s.updated_at,
                        COUNT(m.id) as message_count,
                        (SELECT content FROM messages m2
-                        WHERE m2.session_id = s.id ORDER BY m2.timestamp DESC LIMIT 1) as last_message
+                        WHERE m2.session_id = s.id AND m2.content != '' AND m2.role IN ('user', 'assistant')
+                        ORDER BY m2.timestamp DESC LIMIT 1) as last_message
                 FROM sessions s
                 LEFT JOIN messages m ON m.session_id = s.id
                 GROUP BY s.id
