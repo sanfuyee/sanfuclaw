@@ -23,10 +23,9 @@ def start(
     provider: str = typer.Option(None, "--provider", "-p", help="Override LLM provider"),
     channel: str = typer.Option("cli", "--channel", help="Channel to run (cli, telegram, weixin, all)"),
     resume: str = typer.Option(None, "--resume", "-r", help="Resume a session by ID (prefix match supported)"),
-    new: bool = typer.Option(False, "--new", "-n", help="Start a new session instead of resuming the last one"),
 ):
     """Start the Sanfuclaw agent."""
-    asyncio.run(_run(config, model, provider, channel, resume=resume, new_session=new))
+    asyncio.run(_run(config, model, provider, channel, resume=resume))
 
 
 def _build_transport(settings):
@@ -54,7 +53,6 @@ async def _run(
     provider: str | None,
     channel_mode: str,
     resume: str | None = None,
-    new_session: bool = False,
 ):
     """Main async entry point."""
     from sanfuclaw.core.config import Settings
@@ -127,8 +125,7 @@ async def _run(
     if channel_mode in ("cli", "all"):
         from sanfuclaw.channels.cli_channel import CLIChannel
 
-        # Resolve session for CLI
-        cli_session_id = "cli-session"
+        # Resolve session for CLI: default is a new session each time
         if resume:
             resolved = await _resolve_session(store, resume)
             if not resolved:
@@ -136,10 +133,9 @@ async def _run(
                 raise typer.Exit(1)
             cli_session_id = resolved.id
             console.print(f"[dim]Resuming session {resolved.id[:8]}… ({len(resolved.history)} messages)[/dim]")
-        elif new_session:
+        else:
             import uuid
             cli_session_id = f"cli-{uuid.uuid4().hex[:8]}"
-            console.print(f"[dim]Starting new session {cli_session_id}[/dim]")
 
         cli = CLIChannel(session_id=cli_session_id)
         router.register_channel(cli)

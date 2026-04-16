@@ -71,7 +71,6 @@ python -m sanfuclaw sessions              # List recent sessions
 python -m sanfuclaw sessions -n 20        # Show more sessions
 python -m sanfuclaw sessions --channel cli # Filter by channel
 python -m sanfuclaw start --resume <ID>   # Resume a session (prefix match)
-python -m sanfuclaw start --new           # Force a new session
 ```
 
 ## Architecture
