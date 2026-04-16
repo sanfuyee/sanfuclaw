@@ -92,7 +92,7 @@ class LLMAgent:
                 if chunk.type == StreamChunkType.TEXT_DELTA:
                     full_response += chunk.data
                     yield chunk.data
-                elif chunk.type == StreamChunkType.TOOL_USE and chunk.tool_input:
+                elif chunk.type == StreamChunkType.TOOL_USE and chunk.tool_input is not None:
                     tool_calls.append(chunk)
                 elif chunk.type == StreamChunkType.USAGE:
                     step_input = chunk.input_tokens
