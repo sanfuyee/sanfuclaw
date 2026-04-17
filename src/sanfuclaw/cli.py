@@ -18,7 +18,7 @@ console = Console()
 
 @app.command()
 def start(
-    config: str = typer.Option("sanfuclaw.toml", "--config", "-c", help="Path to config file"),
+    config: str = typer.Option(None, "--config", "-c", help="Path to config file (default: ~/.sanfuclaw/config.json)"),
     model: str = typer.Option(None, "--model", "-m", help="Override LLM model"),
     provider: str = typer.Option(None, "--provider", "-p", help="Override LLM provider"),
     channel: str = typer.Option("cli", "--channel", help="Channel to run (cli, telegram, weixin, all)"),
@@ -32,7 +32,7 @@ def _build_transport(settings):
     """Create the LLM transport based on config."""
     api_key = settings.llm.api_key or os.environ.get("ANTHROPIC_API_KEY", "") or os.environ.get("LLM_API_KEY", "")
     if not api_key:
-        console.print("[red]Error:[/red] No API key found. Set api_key in sanfuclaw.toml or LLM_API_KEY env var")
+        console.print("[red]Error:[/red] No API key found. Set llm.api_key in ~/.sanfuclaw/config.json or LLM_API_KEY env var")
         raise typer.Exit(1)
 
     if settings.llm.provider == "anthropic":
@@ -69,7 +69,7 @@ async def _run(
     from sanfuclaw.tools.web_fetch import WebFetchTool
 
     # Load config
-    settings = Settings.from_toml(config_path)
+    settings = Settings.load(config_path)
     if model:
         settings.llm.model = model
     if provider:
@@ -227,7 +227,7 @@ async def _resolve_session(store, session_id_prefix: str):
 
 @app.command()
 def sessions(
-    config: str = typer.Option("sanfuclaw.toml", "--config", "-c", help="Path to config file"),
+    config: str = typer.Option(None, "--config", "-c", help="Path to config file (default: ~/.sanfuclaw/config.json)"),
     limit: int = typer.Option(10, "--limit", "-n", help="Number of sessions to show"),
     channel_filter: str = typer.Option(None, "--channel", help="Filter by channel"),
 ):
@@ -279,7 +279,7 @@ async def _list_sessions(config_path: str, limit: int, channel_filter: str | Non
 
 @app.command()
 def serve(
-    config: str = typer.Option("sanfuclaw.toml", "--config", "-c", help="Path to config file"),
+    config: str = typer.Option(None, "--config", "-c", help="Path to config file (default: ~/.sanfuclaw/config.json)"),
     host: str = typer.Option(None, "--host", "-h", help="Override host"),
     port: int = typer.Option(None, "--port", help="Override port"),
 ):
@@ -288,7 +288,7 @@ def serve(
     from sanfuclaw.core.config import Settings
     from sanfuclaw.gateway.server import GatewayServer
 
-    settings = Settings.from_toml(config)
+    settings = Settings.load(config)
     server = GatewayServer(settings)
 
     final_host = host or settings.gateway.host
@@ -326,6 +326,90 @@ async def _weixin_login(base_url: str):
     except Exception as e:
         console.print(f"[red]Login failed:[/red] {e}")
         raise typer.Exit(1)
+
+
+DEFAULT_CONFIG: dict = {
+    "llm": {
+        "provider": "openai_compat",
+        "model": "moonshotai/kimi-k2.5",
+        "base_url": "https://api.hpc-ai.com/inference/v1",
+        "api_key": "",
+        "max_tokens": 4096,
+        "temperature": 0.7,
+        "system_prompt": "You are a helpful personal AI assistant called Sanfuclaw. You are running locally on the user's machine. Be concise and helpful.",
+    },
+    "gateway": {"host": "127.0.0.1", "port": 18789},
+    "skills": {"dir": "~/.sanfuclaw/skills"},
+    "channels": {},
+    "mcp": {"servers": {}},
+}
+
+
+@app.command()
+def init(
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing config"),
+):
+    """Create ~/.sanfuclaw/config.json with a default template."""
+    import json as _json
+    from sanfuclaw.core import paths
+
+    cfg = paths.config_file()
+    if cfg.exists() and not force:
+        console.print(f"[yellow]Config already exists:[/yellow] {cfg}")
+        console.print("Use [bold]--force[/bold] to overwrite, or edit the file directly.")
+        raise typer.Exit(0)
+
+    cfg.write_text(_json.dumps(DEFAULT_CONFIG, indent=2) + "\n")
+    paths.skills_dir()  # ensure skills/ exists
+    console.print(f"[green]Created:[/green] {cfg}")
+    console.print(f"[dim]Skills dir: {paths.home() / 'skills'}[/dim]")
+    console.print()
+    console.print("Next: edit the file and set [bold]llm.api_key[/bold], then run [bold]sanfuclaw start[/bold].")
+
+
+@app.command()
+def uninstall(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+    keep_config: bool = typer.Option(False, "--keep-config", help="Keep config.json"),
+):
+    """Remove ~/.sanfuclaw/ (data, sessions, credentials).
+
+    This does NOT uninstall the Python package — run `pip uninstall sanfuclaw` for that.
+    """
+    import shutil
+    from sanfuclaw.core import paths
+
+    home = paths.home()
+    if not home.exists():
+        console.print(f"[dim]Nothing to remove: {home} does not exist.[/dim]")
+        return
+
+    console.print(f"[bold]About to remove:[/bold] {home}")
+    contents = sorted(p.name for p in home.iterdir())
+    for name in contents:
+        console.print(f"  - {name}")
+
+    if not yes:
+        confirm = typer.confirm("Proceed?", default=False)
+        if not confirm:
+            console.print("[yellow]Aborted.[/yellow]")
+            raise typer.Exit(1)
+
+    if keep_config:
+        cfg = paths.config_file()
+        backup = None
+        if cfg.exists():
+            backup = cfg.read_bytes()
+        shutil.rmtree(home)
+        if backup is not None:
+            paths.home()  # recreate dir
+            cfg.write_bytes(backup)
+            console.print(f"[green]Removed data, kept:[/green] {cfg}")
+            return
+
+    shutil.rmtree(home)
+    console.print(f"[green]Removed:[/green] {home}")
+    console.print("[dim]Run [bold]pip uninstall sanfuclaw[/bold] to remove the package itself.[/dim]")
 
 
 @app.command()

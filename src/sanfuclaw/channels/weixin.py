@@ -26,6 +26,11 @@ APP_VERSION = "0.0.1"
 CHANNEL_VERSION = "2.1.7"
 
 
+def _default_weixin_credentials_path() -> str:
+    from sanfuclaw.core.paths import weixin_credentials_file
+    return str(weixin_credentials_file())
+
+
 def _generate_client_id() -> str:
     """Generate a unique client_id matching the OpenClaw format."""
     return f"sanfuclaw:{int(time.time() * 1000)}-{secrets.token_hex(4)}"
@@ -40,8 +45,8 @@ def _random_uin() -> str:
 class WeixinCredentials:
     """Persisted iLink Bot credentials."""
 
-    def __init__(self, path: str | Path = "weixin_credentials.json"):
-        self.path = Path(path)
+    def __init__(self, path: str | Path | None = None):
+        self.path = Path(path) if path else Path(_default_weixin_credentials_path())
         self.bot_token: str = ""
         self.bot_id: str = ""
         self.user_id: str = ""
@@ -268,7 +273,7 @@ class WeixinChannel:
 
     name: str = "weixin"
 
-    def __init__(self, credentials_path: str | Path = "weixin_credentials.json"):
+    def __init__(self, credentials_path: str | Path | None = None):
         self._creds = WeixinCredentials(credentials_path)
         self._api = WeixinAPI(self._creds)
         self._queue: asyncio.Queue[Envelope] = asyncio.Queue()

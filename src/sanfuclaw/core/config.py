@@ -1,13 +1,16 @@
-"""Configuration management — TOML + env vars via Pydantic Settings."""
+"""Configuration management — JSON (default) or TOML, plus env vars."""
 
 from __future__ import annotations
 
+import json
 import tomllib
 from pathlib import Path
 from typing import Any
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
+
+from sanfuclaw.core import paths
 
 
 class LLMConfig(BaseSettings):
@@ -59,11 +62,52 @@ class Settings(BaseSettings):
     mcp: MCPConfig = Field(default_factory=MCPConfig)
 
     @classmethod
-    def from_toml(cls, path: str | Path = "sanfuclaw.toml") -> "Settings":
-        """Load settings from a TOML file, merged with env vars."""
-        p = Path(path)
-        data: dict[str, Any] = {}
-        if p.exists():
-            with open(p, "rb") as f:
-                data = tomllib.load(f)
+    def load(cls, path: str | Path | None = None) -> "Settings":
+        """Load settings from an explicit path, or auto-discover.
+
+        Search order when `path` is None:
+          1. $SANFUCLAW_CONFIG
+          2. ~/.sanfuclaw/config.json
+          3. ./sanfuclaw.toml (legacy, kept for backward compat)
+        """
+        resolved = _resolve_config_path(path)
+        data: dict[str, Any] = _read_config(resolved) if resolved else {}
         return cls(**data)
+
+    @classmethod
+    def from_toml(cls, path: str | Path = "sanfuclaw.toml") -> "Settings":
+        """Legacy loader — kept so old callers keep working."""
+        return cls.load(path)
+
+
+def _resolve_config_path(path: str | Path | None) -> Path | None:
+    if path:
+        p = Path(path).expanduser()
+        return p if p.exists() else None
+
+    import os
+    env_path = os.environ.get("SANFUCLAW_CONFIG")
+    if env_path:
+        p = Path(env_path).expanduser()
+        if p.exists():
+            return p
+
+    user_cfg = paths.config_file()
+    if user_cfg.exists():
+        return user_cfg
+
+    legacy = Path("sanfuclaw.toml")
+    if legacy.exists():
+        return legacy
+
+    return None
+
+
+def _read_config(path: Path) -> dict[str, Any]:
+    suffix = path.suffix.lower()
+    if suffix == ".json":
+        return json.loads(path.read_text())
+    if suffix == ".toml":
+        with open(path, "rb") as f:
+            return tomllib.load(f)
+    raise ValueError(f"Unsupported config format: {path} (expected .json or .toml)")

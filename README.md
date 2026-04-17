@@ -19,36 +19,58 @@ A local-first personal AI agent inspired by [OpenClaw](https://github.com/opencl
 ### Install
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
+# Install from the repo (editable, with dev extras)
 pip install -e ".[dev]"
 
-# For Telegram support
-pip install -e ".[telegram]"
+# Optional extras
+pip install -e ".[telegram]"   # Telegram channel
+pip install -e ".[weixin]"     # WeChat channel
+pip install -e ".[mcp]"        # MCP servers
 ```
+
+Then initialize the user config directory:
+
+```bash
+sanfuclaw init
+```
+
+This creates `~/.sanfuclaw/` with a `config.json` template and a `skills/` folder.
 
 ### Configure
 
-Edit `sanfuclaw.toml`:
+Edit `~/.sanfuclaw/config.json`:
 
-```toml
-[llm]
-provider = "openai_compat"          # or "anthropic"
-model = "minimax/minimax-m2.5"
-base_url = "https://api.hpc-ai.com/inference/v1"
-api_key = "your-api-key"
-
-# Optional: Telegram bot
-[channels.telegram]
-type = "telegram"
-bot_token = "YOUR_BOT_TOKEN"
+```json
+{
+  "llm": {
+    "provider": "openai_compat",
+    "model": "moonshotai/kimi-k2.5",
+    "base_url": "https://api.hpc-ai.com/inference/v1",
+    "api_key": "your-api-key"
+  },
+  "channels": {
+    "telegram": { "type": "telegram", "bot_token": "YOUR_BOT_TOKEN" }
+  }
+}
 ```
 
-Or set API keys via environment variables:
+Or set secrets via environment variables:
 
 ```bash
 export LLM_API_KEY="your-key"
 export TELEGRAM_BOT_TOKEN="your-bot-token"
+```
+
+Config resolution order: `--config <path>` → `$SANFUCLAW_CONFIG` →
+`~/.sanfuclaw/config.json` → `./sanfuclaw.toml` (legacy). Override the home
+directory itself with `$SANFUCLAW_HOME`.
+
+### Uninstall
+
+```bash
+sanfuclaw uninstall          # remove ~/.sanfuclaw/ (data, sessions, credentials)
+sanfuclaw uninstall --keep-config   # keep config.json, drop everything else
+pip uninstall sanfuclaw      # remove the Python package
 ```
 
 ### Run

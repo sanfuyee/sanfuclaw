@@ -18,7 +18,10 @@ MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 class SQLiteStore:
     """SQLite-based persistent storage."""
 
-    def __init__(self, db_path: str = "sanfuclaw.db"):
+    def __init__(self, db_path: str | None = None):
+        if db_path is None:
+            from sanfuclaw.core.paths import db_file
+            db_path = str(db_file())
         self._db_path = db_path
         self._db: aiosqlite.Connection | None = None
 
