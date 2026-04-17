@@ -19,13 +19,13 @@ A local-first personal AI agent inspired by [OpenClaw](https://github.com/opencl
 ### Install
 
 ```bash
-# Install from the repo (editable, with dev extras)
-pip install -e ".[dev]"
+pip install -e .
 
-# Optional extras
+# Optional channel/tool extras (combine in one command if you like):
 pip install -e ".[telegram]"   # Telegram channel
 pip install -e ".[weixin]"     # WeChat channel
 pip install -e ".[mcp]"        # MCP servers
+pip install -e ".[telegram,mcp]"
 ```
 
 The first time you run any `sanfuclaw` command it auto-creates
@@ -339,6 +339,14 @@ src/sanfuclaw/
   storage/      # SQLite backend
   webchat/      # Browser chat UI
 skills/         # User skill library (*.md)
+```
+
+## Contributing
+
+```bash
+pip install -e ".[dev]"   # adds pytest, pytest-asyncio, ruff, mypy
+pytest
+ruff check src/
 ```
 
 ## License
