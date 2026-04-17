@@ -28,13 +28,10 @@ pip install -e ".[weixin]"     # WeChat channel
 pip install -e ".[mcp]"        # MCP servers
 ```
 
-Then initialize the user config directory:
-
-```bash
-sanfuclaw init
-```
-
-This creates `~/.sanfuclaw/` with a `config.json` template and a `skills/` folder.
+The first time you run any `sanfuclaw` command it auto-creates
+`~/.sanfuclaw/config.json` (template) and `~/.sanfuclaw/skills/`. No
+extra setup step is required — just run `sanfuclaw --help` once, then
+edit the config.
 
 ### Configure
 
@@ -68,10 +65,16 @@ directory itself with `$SANFUCLAW_HOME`.
 ### Uninstall
 
 ```bash
-sanfuclaw uninstall          # remove ~/.sanfuclaw/ (data, sessions, credentials)
-sanfuclaw uninstall --keep-config   # keep config.json, drop everything else
-pip uninstall sanfuclaw      # remove the Python package
+sanfuclaw uninstall --purge      # remove ~/.sanfuclaw/ AND the Python package
+sanfuclaw uninstall              # remove ~/.sanfuclaw/ only
+sanfuclaw uninstall --keep-config  # drop data, keep config.json
+pip uninstall sanfuclaw          # remove only the package (leaves ~/.sanfuclaw/)
 ```
+
+`pip install` / `pip uninstall` alone can't touch files outside the
+package directory (Python packaging has no post-install or pre-uninstall
+hooks), so the user-data dance lives in `sanfuclaw uninstall`.
+`--purge` wraps both steps into one command.
 
 ### Run
 

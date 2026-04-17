@@ -16,6 +16,28 @@ app = typer.Typer(
 console = Console()
 
 
+def _ensure_home_initialized() -> None:
+    """First-run auto-init: create ~/.sanfuclaw/config.json + skills/ if missing.
+
+    Runs before every CLI invocation so `pip install` + any `sanfuclaw` command
+    produces a ready-to-edit config with no extra setup step.
+    """
+    import json as _json
+    from sanfuclaw.core import paths
+
+    cfg = paths.config_file()
+    if not cfg.exists():
+        cfg.write_text(_json.dumps(DEFAULT_CONFIG, indent=2) + "\n")
+        console.print(f"[dim]First run — created {cfg}[/dim]")
+    paths.skills_dir()
+
+
+@app.callback()
+def _main():
+    """Sanfuclaw — your personal AI agent."""
+    _ensure_home_initialized()
+
+
 @app.command()
 def start(
     config: str = typer.Option(None, "--config", "-c", help="Path to config file (default: ~/.sanfuclaw/config.json)"),
@@ -371,23 +393,37 @@ def init(
 def uninstall(
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
     keep_config: bool = typer.Option(False, "--keep-config", help="Keep config.json"),
+    purge: bool = typer.Option(False, "--purge", help="Also run `pip uninstall sanfuclaw`"),
 ):
     """Remove ~/.sanfuclaw/ (data, sessions, credentials).
 
-    This does NOT uninstall the Python package — run `pip uninstall sanfuclaw` for that.
+    Pass --purge to additionally uninstall the Python package in one go.
     """
     import shutil
+    import subprocess
+    import sys
     from sanfuclaw.core import paths
 
     home = paths.home()
-    if not home.exists():
-        console.print(f"[dim]Nothing to remove: {home} does not exist.[/dim]")
+    home_exists = home.exists() and any(home.iterdir())
+
+    targets = []
+    if home_exists:
+        targets.append(str(home))
+    if purge:
+        targets.append("Python package 'sanfuclaw'")
+
+    if not targets:
+        console.print(f"[dim]Nothing to remove.[/dim]")
         return
 
-    console.print(f"[bold]About to remove:[/bold] {home}")
-    contents = sorted(p.name for p in home.iterdir())
-    for name in contents:
-        console.print(f"  - {name}")
+    console.print("[bold]About to remove:[/bold]")
+    for t in targets:
+        console.print(f"  - {t}")
+    if home_exists:
+        contents = sorted(p.name for p in home.iterdir())
+        for name in contents:
+            console.print(f"      · {name}")
 
     if not yes:
         confirm = typer.confirm("Proceed?", default=False)
@@ -395,21 +431,26 @@ def uninstall(
             console.print("[yellow]Aborted.[/yellow]")
             raise typer.Exit(1)
 
-    if keep_config:
-        cfg = paths.config_file()
-        backup = None
-        if cfg.exists():
-            backup = cfg.read_bytes()
-        shutil.rmtree(home)
-        if backup is not None:
-            paths.home()  # recreate dir
-            cfg.write_bytes(backup)
-            console.print(f"[green]Removed data, kept:[/green] {cfg}")
-            return
+    if home_exists:
+        if keep_config:
+            cfg = paths.config_file()
+            backup = cfg.read_bytes() if cfg.exists() else None
+            shutil.rmtree(home)
+            if backup is not None:
+                paths.home()
+                cfg.write_bytes(backup)
+                console.print(f"[green]Removed data, kept:[/green] {cfg}")
+        else:
+            shutil.rmtree(home)
+            console.print(f"[green]Removed:[/green] {home}")
 
-    shutil.rmtree(home)
-    console.print(f"[green]Removed:[/green] {home}")
-    console.print("[dim]Run [bold]pip uninstall sanfuclaw[/bold] to remove the package itself.[/dim]")
+    if purge:
+        console.print("[dim]Running `pip uninstall sanfuclaw -y`…[/dim]")
+        rc = subprocess.call([sys.executable, "-m", "pip", "uninstall", "-y", "sanfuclaw"])
+        if rc != 0:
+            console.print(f"[red]pip uninstall exited with code {rc}[/red]")
+            raise typer.Exit(rc)
+        console.print("[green]Package uninstalled.[/green]")
 
 
 @app.command()
