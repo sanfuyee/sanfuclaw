@@ -34,7 +34,7 @@ class GatewayServer:
         # bookkeeping) and by resolved session id (for routing replies back).
         self._ws_by_conn: dict[str, WebSocket] = {}
         self._ws_by_session: dict[str, WebSocket] = {}
-        self._mcp_manager = None
+        self._wiring = None
         self.app = self._create_app()
 
     def _create_app(self) -> FastAPI:
@@ -48,8 +48,8 @@ class GatewayServer:
             logger.info(f"Gateway started on {self.settings.gateway.host}:{self.settings.gateway.port}")
             yield
             # Shutdown
-            if self._mcp_manager:
-                await self._mcp_manager.stop()
+            if self._wiring:
+                await self._wiring.shutdown()
             if self.store:
                 await self.store.close()
 
@@ -125,12 +125,14 @@ class GatewayServer:
         """Wire tools/MCP/agent/router via the shared factory, then attach the WS channel."""
         from sanfuclaw.gateway.wiring import build_router
 
-        wiring = await build_router(self.settings, self.session_manager)
-        self._mcp_manager = wiring.mcp_manager
-        self._router = wiring.router
+        self._wiring = await build_router(self.settings, self.store, self.session_manager)
+        self._router = self._wiring.router
 
         ws_channel = WSChannel(self)
         self._router.register_channel(ws_channel)
+
+        # Channels registered — start runtime services (scheduler).
+        await self._wiring.start_runtime()
 
     async def _handle_ws_message(self, ws: WebSocket, conn_id: str, raw: str):
         """Handle incoming WebSocket message (JSON wire protocol)."""

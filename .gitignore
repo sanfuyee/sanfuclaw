@@ -141,6 +141,7 @@ weixin_qr.png
 *.db
 *.db-journal
 *.db-wal
+*.db-shm
 
 # Environments
 .env

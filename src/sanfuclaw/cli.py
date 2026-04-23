@@ -15,6 +15,9 @@ app = typer.Typer(
 )
 console = Console()
 
+from sanfuclaw.cli_cron import cron_app
+app.add_typer(cron_app, name="cron")
+
 
 def _default_config_dict() -> dict:
     """Single source of truth for the on-disk default config — derived from Settings()."""
@@ -78,7 +81,7 @@ async def _run(
 
     # Wire tools/MCP/agent/router via shared factory
     try:
-        wiring = await build_router(settings, session_manager)
+        wiring = await build_router(settings, store, session_manager)
     except MissingAPIKey as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
@@ -143,9 +146,11 @@ async def _run(
         console.print(f"[red]Error:[/red] Unknown channel: {channel_mode}")
         raise typer.Exit(1)
 
-    # Start all channels
+    # Start all channels, then start runtime services (scheduler) — order
+    # matters: scheduler routes through channels, so they must exist first.
     for ch in channels:
         await ch.start()
+    await wiring.start_runtime()
 
     try:
         if len(channels) == 1:
