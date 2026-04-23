@@ -14,10 +14,12 @@ from sanfuclaw.agents.llm_agent import LLMAgent
 from sanfuclaw.agents.transports.base import LLMTransport
 from sanfuclaw.core.config import Settings
 from sanfuclaw.gateway.router import Router
+from sanfuclaw.gateway.scheduler import Scheduler
 from sanfuclaw.gateway.session_manager import SessionManager
 from sanfuclaw.mcp_client.manager import MCPManager
 from sanfuclaw.mcp_client.tool_adapter import MCPToolAdapter
 from sanfuclaw.skills.registry import SkillRegistry
+from sanfuclaw.storage.base import Store
 from sanfuclaw.tools.registry import ToolRegistry
 from sanfuclaw.tools.shell import ShellTool
 from sanfuclaw.tools.skill_loader import LoadSkillTool
@@ -35,8 +37,18 @@ class Wiring:
     mcp_manager: MCPManager
     tool_registry: ToolRegistry
     skill_registry: SkillRegistry
+    scheduler: Scheduler
+
+    async def start_runtime(self) -> None:
+        """Start runtime services that depend on channels being registered.
+
+        Call this AFTER all channels have been registered on the router —
+        the scheduler routes envelopes through them, so they need to exist.
+        """
+        await self.scheduler.start()
 
     async def shutdown(self) -> None:
+        await self.scheduler.stop()
         await self.mcp_manager.stop()
 
 
@@ -64,8 +76,10 @@ def build_transport(settings: Settings) -> LLMTransport:
     )
 
 
-async def build_router(settings: Settings, session_manager: SessionManager) -> Wiring:
-    """Wire tools, MCP servers, transport, agent, and router from settings."""
+async def build_router(
+    settings: Settings, store: Store, session_manager: SessionManager
+) -> Wiring:
+    """Wire tools, MCP servers, transport, agent, router, and scheduler."""
     skill_registry = SkillRegistry(settings.skills.dir)
 
     tool_registry = ToolRegistry()
@@ -95,10 +109,13 @@ async def build_router(settings: Settings, session_manager: SessionManager) -> W
     router = Router(session_manager=session_manager)
     router.register_agent(agent, default=True)
 
+    scheduler = Scheduler(store=store, router=router)
+
     return Wiring(
         router=router,
         agent=agent,
         mcp_manager=mcp_manager,
         tool_registry=tool_registry,
         skill_registry=skill_registry,
+        scheduler=scheduler,
     )

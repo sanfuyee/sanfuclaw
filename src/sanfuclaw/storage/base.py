@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from sanfuclaw.core.message import Message
+from sanfuclaw.core.schedule import Schedule
 from sanfuclaw.core.session import Session
 
 
@@ -37,4 +38,21 @@ class Store(Protocol):
         self, channel_id: str | None = None, limit: int = 20
     ) -> list[dict]:
         """List recent sessions with summary info (id, channel, updated_at, message_count, last_message)."""
+        ...
+
+    # --- Schedules ---
+
+    async def add_schedule(self, schedule: Schedule) -> None:
+        ...
+
+    async def get_schedule(self, schedule_id: str) -> Schedule | None:
+        ...
+
+    async def list_schedules(self, enabled_only: bool = False) -> list[Schedule]:
+        ...
+
+    async def update_schedule(self, schedule: Schedule) -> None:
+        ...
+
+    async def remove_schedule(self, schedule_id: str) -> None:
         ...

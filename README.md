@@ -10,6 +10,7 @@ A local-first personal AI agent inspired by [OpenClaw](https://github.com/opencl
 - **Skill plugins**: Markdown-based skills with frontmatter, lazy-loaded on demand
 - **MCP support**: Connect to any Model Context Protocol server over stdio or SSE
 - **Persistent sessions**: SQLite-backed conversation history with list/resume support
+- **Scheduled tasks**: cron-driven prompts that fire into any channel
 - **Gateway server**: FastAPI with WebSocket streaming, REST API, WebChat UI
 - **Event hooks**: Pluggable event system for custom integrations
 - **Streaming-first**: Real-time response streaming across all channels
@@ -19,14 +20,11 @@ A local-first personal AI agent inspired by [OpenClaw](https://github.com/opencl
 ### Install
 
 ```bash
-pip install -e .
-
-# Optional channel/tool extras (combine in one command if you like):
-pip install -e ".[telegram]"   # Telegram channel
-pip install -e ".[weixin]"     # WeChat channel
-pip install -e ".[mcp]"        # MCP servers
-pip install -e ".[telegram,mcp]"
+pip install -e .                          # core only
+pip install -e ".[telegram,weixin,mcp]"   # with optional channels + MCP
 ```
+
+Extras are `telegram`, `weixin`, `mcp` — pick any combination.
 
 The first time you run any `sanfuclaw` command it auto-creates
 `~/.sanfuclaw/config.json` (template) and `~/.sanfuclaw/skills/`. No
@@ -65,16 +63,13 @@ directory itself with `$SANFUCLAW_HOME`.
 ### Uninstall
 
 ```bash
-sanfuclaw uninstall --purge      # remove ~/.sanfuclaw/ AND the Python package
-sanfuclaw uninstall              # remove ~/.sanfuclaw/ only
-sanfuclaw uninstall --keep-config  # drop data, keep config.json
-pip uninstall sanfuclaw          # remove only the package (leaves ~/.sanfuclaw/)
+pip uninstall sanfuclaw    # remove the package
+rm -rf ~/.sanfuclaw/       # optional: drop user data (config, sessions, credentials)
 ```
 
-`pip install` / `pip uninstall` alone can't touch files outside the
-package directory (Python packaging has no post-install or pre-uninstall
-hooks), so the user-data dance lives in `sanfuclaw uninstall`.
-`--purge` wraps both steps into one command.
+`pip uninstall` removes only the Python package — Python packaging has no
+post-uninstall hook, so user data in `~/.sanfuclaw/` stays put unless you
+remove it yourself.
 
 ### Run
 
@@ -96,6 +91,12 @@ python -m sanfuclaw sessions              # List recent sessions
 python -m sanfuclaw sessions -n 20        # Show more sessions
 python -m sanfuclaw sessions --channel cli # Filter by channel
 python -m sanfuclaw start --resume <ID>   # Resume a session (prefix match)
+
+# Scheduled tasks (cron-driven prompts)
+python -m sanfuclaw cron add "0 8 * * *" --channel telegram --prompt "今日天气和待办"
+python -m sanfuclaw cron list
+python -m sanfuclaw cron disable <ID>     # pause without deleting
+python -m sanfuclaw cron remove <ID>
 ```
 
 ## Architecture

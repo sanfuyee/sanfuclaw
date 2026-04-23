@@ -15,6 +15,9 @@ app = typer.Typer(
 )
 console = Console()
 
+from sanfuclaw.cli_cron import cron_app
+app.add_typer(cron_app, name="cron")
+
 
 def _default_config_dict() -> dict:
     """Single source of truth for the on-disk default config — derived from Settings()."""
@@ -78,7 +81,7 @@ async def _run(
 
     # Wire tools/MCP/agent/router via shared factory
     try:
-        wiring = await build_router(settings, session_manager)
+        wiring = await build_router(settings, store, session_manager)
     except MissingAPIKey as e:
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
@@ -143,9 +146,11 @@ async def _run(
         console.print(f"[red]Error:[/red] Unknown channel: {channel_mode}")
         raise typer.Exit(1)
 
-    # Start all channels
+    # Start all channels, then start runtime services (scheduler) — order
+    # matters: scheduler routes through channels, so they must exist first.
     for ch in channels:
         await ch.start()
+    await wiring.start_runtime()
 
     try:
         if len(channels) == 1:
@@ -322,70 +327,6 @@ def init(
     console.print(f"[dim]Skills dir: {paths.home() / 'skills'}[/dim]")
     console.print()
     console.print("Next: edit the file and set [bold]llm.api_key[/bold], then run [bold]sanfuclaw start[/bold].")
-
-
-@app.command()
-def uninstall(
-    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
-    keep_config: bool = typer.Option(False, "--keep-config", help="Keep config.json"),
-    purge: bool = typer.Option(False, "--purge", help="Also run `pip uninstall sanfuclaw`"),
-):
-    """Remove ~/.sanfuclaw/ (data, sessions, credentials).
-
-    Pass --purge to additionally uninstall the Python package in one go.
-    """
-    import shutil
-    import subprocess
-    import sys
-    from sanfuclaw.core import paths
-
-    home = paths.home()
-    home_exists = home.exists() and any(home.iterdir())
-
-    targets = []
-    if home_exists:
-        targets.append(str(home))
-    if purge:
-        targets.append("Python package 'sanfuclaw'")
-
-    if not targets:
-        console.print(f"[dim]Nothing to remove.[/dim]")
-        return
-
-    console.print("[bold]About to remove:[/bold]")
-    for t in targets:
-        console.print(f"  - {t}")
-    if home_exists:
-        contents = sorted(p.name for p in home.iterdir())
-        for name in contents:
-            console.print(f"      · {name}")
-
-    if not yes:
-        confirm = typer.confirm("Proceed?", default=False)
-        if not confirm:
-            console.print("[yellow]Aborted.[/yellow]")
-            raise typer.Exit(1)
-
-    if home_exists:
-        if keep_config:
-            cfg = paths.config_file()
-            backup = cfg.read_bytes() if cfg.exists() else None
-            shutil.rmtree(home)
-            if backup is not None:
-                paths.home()
-                cfg.write_bytes(backup)
-                console.print(f"[green]Removed data, kept:[/green] {cfg}")
-        else:
-            shutil.rmtree(home)
-            console.print(f"[green]Removed:[/green] {home}")
-
-    if purge:
-        console.print("[dim]Running `pip uninstall sanfuclaw -y`…[/dim]")
-        rc = subprocess.call([sys.executable, "-m", "pip", "uninstall", "-y", "sanfuclaw"])
-        if rc != 0:
-            console.print(f"[red]pip uninstall exited with code {rc}[/red]")
-            raise typer.Exit(rc)
-        console.print("[green]Package uninstalled.[/green]")
 
 
 @app.command()
