@@ -12,10 +12,9 @@ from sanfuclaw.gateway.session_manager import SessionManager
 class Router:
     """Central message router connecting channels to agents."""
 
-    def __init__(self, session_manager: SessionManager | None = None):
+    def __init__(self, session_manager: SessionManager):
         self._channels: dict[str, Channel] = {}
         self._agents: dict[str, Agent] = {}
-        self._sessions: dict[str, Session] = {}
         self._default_agent: str | None = None
         self._session_manager = session_manager
 
@@ -28,19 +27,8 @@ class Router:
             self._default_agent = agent.name
 
     async def get_or_create_session(self, envelope: Envelope) -> Session:
-        """Resolve or create a session, with optional persistence."""
-        if self._session_manager:
-            return await self._session_manager.get_or_create(envelope)
-
-        # Fallback: in-memory only
-        session_id = envelope.message.session_id
-        if session_id not in self._sessions:
-            self._sessions[session_id] = Session(
-                id=session_id,
-                channel_id=envelope.source_channel,
-                sender_id=envelope.message.sender_id,
-            )
-        return self._sessions[session_id]
+        """Resolve or create a session via the session manager."""
+        return await self._session_manager.get_or_create(envelope)
 
     def resolve_agent(self, envelope: Envelope) -> Agent:
         """Determine which agent should handle this envelope."""
@@ -57,32 +45,44 @@ class Router:
         if not channel:
             raise ValueError(f"Unknown channel: {envelope.source_channel}")
 
+        # All downstream channel calls use the resolved session.id, not the
+        # incoming envelope's session_id (which may be empty or a placeholder
+        # the SessionManager remapped to a different ID).
+        sid = session.id
+
         # Send typing indicator
-        await channel.send_typing(envelope.message.session_id)
+        await channel.send_typing(sid)
+
+        # Snapshot history length so we only persist messages added this turn.
+        baseline = len(session.history)
 
         # Stream response back to channel
         full_response = ""
         async for chunk in agent.process(envelope, session):
             full_response += chunk
-            await channel.send(envelope.message.session_id, chunk, streaming=True)
+            await channel.send(sid, chunk, streaming=True)
 
         # Signal stream complete — flush buffered response
-        await channel.send(envelope.message.session_id, full_response, done=True)
+        await channel.send(sid, full_response, done=True)
 
-        # Persist session and messages
-        if self._session_manager:
-            await self._session_manager.update_session(session)
-            for msg in session.history:
-                # Ensure message has the correct session_id
-                if msg.session_id != session.id:
-                    msg = Message(
-                        role=msg.role,
-                        content=msg.content,
-                        id=msg.id,
-                        channel_id=msg.channel_id,
-                        sender_id=msg.sender_id,
-                        metadata=msg.metadata,
-                        timestamp=msg.timestamp,
-                        session_id=session.id,
-                    )
-                await self._session_manager.save_message(msg)
+        # Deliver the per-turn trace as a separate event, but only to channels
+        # that opt in (CLI). User-facing channels (WeChat/Telegram) skip it.
+        trace = getattr(agent, "last_trace", "")
+        if trace and getattr(channel, "wants_trace", False):
+            await channel.send(sid, trace, trace=True)
+
+        # Persist session metadata + only the messages added during this turn.
+        await self._session_manager.update_session(session)
+        for msg in session.history[baseline:]:
+            if msg.session_id != session.id:
+                msg = Message(
+                    role=msg.role,
+                    content=msg.content,
+                    id=msg.id,
+                    channel_id=msg.channel_id,
+                    sender_id=msg.sender_id,
+                    metadata=msg.metadata,
+                    timestamp=msg.timestamp,
+                    session_id=session.id,
+                )
+            await self._session_manager.save_message(msg)

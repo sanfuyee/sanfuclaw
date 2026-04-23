@@ -81,8 +81,8 @@ tools are normal tools behind a thin adapter.
 
 Intentionally *not* in the stack: no ORM (there are 3 tables; raw SQL is
 clearer), no scheduler (there is no recurring work), no dependency
-injection framework (wiring happens explicitly in `cli.py` and
-`gateway/server.py`).
+injection framework (wiring happens explicitly in `gateway/wiring.py`,
+shared by both the CLI and gateway entry points).
 
 ## Core abstractions
 
@@ -151,8 +151,10 @@ implementation and they're pure registry/dispatch code:
    from SQLite on first hit, cached in memory afterward.
 3. **Router picks an agent** (`envelope.target_agent` or the default)
    and calls `agent.process(envelope, session)`.
-4. **Agent trims history** to `max_history` (default 20) most recent
-   messages. Long sessions never inflate token cost unboundedly.
+4. **Agent slices history** to the `max_history` (default 20) most
+   recent messages for the prompt — without mutating `session.history`,
+   so the persisted record stays complete. Long sessions never inflate
+   token cost unboundedly.
 5. **Agent builds provider-specific messages.** Anthropic format nests
    tool calls inside an assistant `content` array; OpenAI format uses a
    separate `tool_calls` field. `_build_anthropic_tool_messages` /
@@ -179,12 +181,15 @@ The loop caps at `max_tool_rounds` (default 5) to prevent runaway
 call chains. On the final turn with no more tool calls, the agent:
 
 - saves the final assistant message to the session,
-- yields a trailing **trace summary** — per-round token counts, the list
-  of tools invoked with their summarized inputs, total input/output, and
-  current history depth — as the last chunk.
+- stashes a **trace summary** — per-round token counts, the list of
+  tools invoked with their summarized inputs, total input/output, and
+  current history depth — on `agent.last_trace`.
 
-This trace is appended as *content*, not logged, so users see it in the
-channel and can tell what the agent actually did.
+The router delivers this trace out-of-band via `channel.send(sid, trace,
+trace=True)`, but only to channels that opt in by setting
+`wants_trace = True`. Today only `CLIChannel` opts in. User-facing
+channels (Telegram, WeChat, WebChat) do not see the trace, so platform
+users only see the model's actual response.
 
 ### Channel streaming vs. buffering
 
@@ -219,12 +224,16 @@ After each successful `route()`:
 
 1. `SessionManager.update_session(session)` writes the updated
    `updated_at` and any changed metadata.
-2. Each message on the session history is `save_message()`'d. The
-   router re-stamps `session_id` on any message whose id drifted during
-   processing — a safety net for tool messages generated mid-loop.
+2. **Only the messages added during this turn** are `save_message()`'d.
+   The router snapshots `len(session.history)` before invoking the agent
+   and writes `history[baseline:]` afterwards, so old rows aren't
+   re-INSERTed every turn. The router also re-stamps `session_id` on any
+   message whose id drifted during processing — a safety net for tool
+   messages generated mid-loop.
 
 Messages are append-only; history trimming happens in memory at the
-agent layer and does not delete rows. The SQLite file is the source of
+agent layer (via a local slice in `_build_messages`) and does not mutate
+`session.history` or delete rows. The SQLite file is the source of
 truth for restarts.
 
 ## Subsystems

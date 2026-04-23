@@ -16,6 +16,12 @@ app = typer.Typer(
 console = Console()
 
 
+def _default_config_dict() -> dict:
+    """Single source of truth for the on-disk default config — derived from Settings()."""
+    from sanfuclaw.core.config import Settings
+    return Settings().model_dump(mode="json")
+
+
 def _ensure_home_initialized() -> None:
     """First-run auto-init: create ~/.sanfuclaw/config.json + skills/ if missing.
 
@@ -27,15 +33,9 @@ def _ensure_home_initialized() -> None:
 
     cfg = paths.config_file()
     if not cfg.exists():
-        cfg.write_text(_json.dumps(DEFAULT_CONFIG, indent=2) + "\n")
+        cfg.write_text(_json.dumps(_default_config_dict(), indent=2) + "\n")
         console.print(f"[dim]First run — created {cfg}[/dim]")
     paths.skills_dir()
-
-
-@app.callback()
-def _main():
-    """Sanfuclaw — your personal AI agent."""
-    _ensure_home_initialized()
 
 
 @app.command()
@@ -47,26 +47,8 @@ def start(
     resume: str = typer.Option(None, "--resume", "-r", help="Resume a session by ID (prefix match supported)"),
 ):
     """Start the Sanfuclaw agent."""
+    _ensure_home_initialized()
     asyncio.run(_run(config, model, provider, channel, resume=resume))
-
-
-def _build_transport(settings):
-    """Create the LLM transport based on config."""
-    api_key = settings.llm.api_key or os.environ.get("ANTHROPIC_API_KEY", "") or os.environ.get("LLM_API_KEY", "")
-    if not api_key:
-        console.print("[red]Error:[/red] No API key found. Set llm.api_key in ~/.sanfuclaw/config.json or LLM_API_KEY env var")
-        raise typer.Exit(1)
-
-    if settings.llm.provider == "anthropic":
-        from sanfuclaw.agents.transports.anthropic import AnthropicTransport
-        return AnthropicTransport(api_key=api_key, default_model=settings.llm.model)
-    else:
-        from sanfuclaw.agents.transports.openai_compat import OpenAICompatTransport
-        return OpenAICompatTransport(
-            api_key=api_key,
-            base_url=settings.llm.base_url,
-            default_model=settings.llm.model,
-        )
 
 
 async def _run(
@@ -78,17 +60,9 @@ async def _run(
 ):
     """Main async entry point."""
     from sanfuclaw.core.config import Settings
-    from sanfuclaw.agents.llm_agent import LLMAgent
-    from sanfuclaw.gateway.router import Router
     from sanfuclaw.gateway.session_manager import SessionManager
+    from sanfuclaw.gateway.wiring import MissingAPIKey, build_router
     from sanfuclaw.storage.sqlite import SQLiteStore
-    from sanfuclaw.mcp_client.manager import MCPManager
-    from sanfuclaw.mcp_client.tool_adapter import MCPToolAdapter
-    from sanfuclaw.skills.registry import SkillRegistry
-    from sanfuclaw.tools.registry import ToolRegistry
-    from sanfuclaw.tools.shell import ShellTool
-    from sanfuclaw.tools.skill_loader import LoadSkillTool
-    from sanfuclaw.tools.web_fetch import WebFetchTool
 
     # Load config
     settings = Settings.load(config_path)
@@ -100,46 +74,23 @@ async def _run(
     # Set up storage and session manager
     store = SQLiteStore()
     await store.init()
-
     session_manager = SessionManager(store)
 
-    # Set up skills
-    skill_registry = SkillRegistry(settings.skills.dir)
-    if len(skill_registry) > 0:
-        console.print(f"[dim]Loaded {len(skill_registry)} skill(s) from {settings.skills.dir}[/dim]")
+    # Wire tools/MCP/agent/router via shared factory
+    try:
+        wiring = await build_router(settings, session_manager)
+    except MissingAPIKey as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
 
-    # Set up tools
-    tool_registry = ToolRegistry()
-    tool_registry.register(ShellTool())
-    tool_registry.register(WebFetchTool())
-    if len(skill_registry) > 0:
-        tool_registry.register(LoadSkillTool(skill_registry))
+    if len(wiring.skill_registry) > 0:
+        console.print(
+            f"[dim]Loaded {len(wiring.skill_registry)} skill(s) from {settings.skills.dir}[/dim]"
+        )
+    if wiring.mcp_manager.tools():
+        console.print(f"[dim]Loaded {len(wiring.mcp_manager.tools())} MCP tool(s)[/dim]")
 
-    # Set up MCP servers — start and register their tools
-    mcp_manager = MCPManager(settings.mcp.servers)
-    await mcp_manager.start()
-    for server_name, mcp_tool in mcp_manager.tools():
-        session = mcp_manager.get_session(server_name)
-        tool_registry.register(MCPToolAdapter(server_name, mcp_tool, session))
-    if mcp_manager.tools():
-        console.print(f"[dim]Loaded {len(mcp_manager.tools())} MCP tool(s)[/dim]")
-
-    # Set up transport and agent
-    transport = _build_transport(settings)
-    agent = LLMAgent(
-        name="default",
-        transport=transport,
-        tool_registry=tool_registry,
-        skill_registry=skill_registry,
-        system_prompt=settings.llm.system_prompt,
-        model=settings.llm.model,
-        max_tokens=settings.llm.max_tokens,
-        temperature=settings.llm.temperature,
-    )
-
-    # Set up router
-    router = Router(session_manager=session_manager)
-    router.register_agent(agent, default=True)
+    router = wiring.router
 
     # Build channels
     channels = []
@@ -221,7 +172,7 @@ async def _run(
     finally:
         for ch in channels:
             await ch.stop()
-        await mcp_manager.stop()
+        await wiring.shutdown()
         await store.close()
 
 
@@ -310,6 +261,7 @@ def serve(
     from sanfuclaw.core.config import Settings
     from sanfuclaw.gateway.server import GatewayServer
 
+    _ensure_home_initialized()
     settings = Settings.load(config)
     server = GatewayServer(settings)
 
@@ -350,23 +302,6 @@ async def _weixin_login(base_url: str):
         raise typer.Exit(1)
 
 
-DEFAULT_CONFIG: dict = {
-    "llm": {
-        "provider": "openai_compat",
-        "model": "moonshotai/kimi-k2.5",
-        "base_url": "https://api.hpc-ai.com/inference/v1",
-        "api_key": "",
-        "max_tokens": 4096,
-        "temperature": 0.7,
-        "system_prompt": "You are a helpful personal AI assistant called Sanfuclaw. You are running locally on the user's machine. Be concise and helpful.",
-    },
-    "gateway": {"host": "127.0.0.1", "port": 18789},
-    "skills": {"dir": "~/.sanfuclaw/skills"},
-    "channels": {},
-    "mcp": {"servers": {}},
-}
-
-
 @app.command()
 def init(
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing config"),
@@ -381,7 +316,7 @@ def init(
         console.print("Use [bold]--force[/bold] to overwrite, or edit the file directly.")
         raise typer.Exit(0)
 
-    cfg.write_text(_json.dumps(DEFAULT_CONFIG, indent=2) + "\n")
+    cfg.write_text(_json.dumps(_default_config_dict(), indent=2) + "\n")
     paths.skills_dir()  # ensure skills/ exists
     console.print(f"[green]Created:[/green] {cfg}")
     console.print(f"[dim]Skills dir: {paths.home() / 'skills'}[/dim]")

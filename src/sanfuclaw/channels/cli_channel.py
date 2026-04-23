@@ -19,6 +19,7 @@ class CLIChannel:
     """A channel that reads from stdin and writes to stdout."""
 
     name: str = "cli"
+    wants_trace: bool = True
 
     def __init__(self, session_id: str = "cli-session"):
         self._session_id = session_id
@@ -34,6 +35,9 @@ class CLIChannel:
 
     async def send(self, session_id: str, content: str, **kwargs) -> None:
         """Print assistant response to terminal."""
+        if kwargs.get("trace"):
+            console.print(f"\n[dim]---[/dim]\n[dim]{content}[/dim]")
+            return
         done = kwargs.get("done", False)
         if done:
             # End of response

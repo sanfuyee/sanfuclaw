@@ -14,13 +14,16 @@ from sanfuclaw.core import paths
 
 
 class LLMConfig(BaseSettings):
-    provider: str = "anthropic"
-    model: str = "claude-sonnet-4-20250514"
+    provider: str = "openai_compat"
+    model: str = "moonshotai/kimi-k2.5"
     api_key: str = ""
-    base_url: str = ""
+    base_url: str = "https://api.hpc-ai.com/inference/v1"
     max_tokens: int = 4096
     temperature: float = 0.7
-    system_prompt: str = "You are a helpful personal AI assistant called Sanfuclaw."
+    system_prompt: str = (
+        "You are a helpful personal AI assistant called Sanfuclaw. "
+        "You are running locally on the user's machine. Be concise and helpful."
+    )
 
 
 class GatewayConfig(BaseSettings):

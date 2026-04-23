@@ -174,13 +174,16 @@ through the same channel. Tools, skills, and MCP servers all plug into a single
 - **One Envelope, many channels.** The Router is channel-agnostic; a
   per-channel `session_id` convention (`tg-<chat>`, `wx-<user>`, `ws-<conn>`,
   `cli-session`) lets the same storage/agent pipeline serve all of them.
-- **History trimming at the agent.** `LLMAgent` caps `session.history` to the
-  last N messages (default 20) before building the prompt, so long-running
-  sessions don't inflate token cost.
+- **History trimming at the agent.** `LLMAgent` slices the last N messages
+  (default 20) when building the prompt without mutating `session.history`,
+  so long-running sessions don't inflate token cost and the persisted record
+  stays complete.
 - **Usage tracking is first-class.** `StreamChunk` has a `USAGE` variant, and
   the OpenAI-compat transport de-duplicates providers that repeat usage in
-  every chunk. The agent appends a per-turn trace (tool calls + total in/out
-  tokens) to the response so you can see what happened.
+  every chunk. The agent stashes a per-turn trace (tool calls + total in/out
+  tokens) on `agent.last_trace`; the router delivers it out-of-band only to
+  channels that opt in via `wants_trace = True` (today, just CLI). User-facing
+  channels stay clean.
 - **Platform limitations are respected.** Telegram and WeChat can't render
   partial tokens, so their channels buffer the full response and send on
   `done=True`. CLI and WebChat stream in real time. All channels use the same
@@ -329,7 +332,7 @@ All key interfaces use `typing.Protocol` for structural subtyping:
 ```
 src/sanfuclaw/
   core/         # Message, Session, Config, Types, Errors
-  gateway/      # Router, Server, SessionManager, Hooks
+  gateway/      # Router, Server, SessionManager, Wiring (factory), Hooks
   agents/       # Agent protocol, LLM agent
     transports/ # Anthropic, OpenAI-compatible
   channels/     # CLI, Telegram, WeChat, WebChat

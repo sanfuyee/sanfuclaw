@@ -2,22 +2,21 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
-import os
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from pathlib import Path
 
 from sanfuclaw.core.config import Settings
 from sanfuclaw.core.message import Envelope, Message
 from sanfuclaw.core.types import MessageRole
 from sanfuclaw.gateway.session_manager import SessionManager
+from sanfuclaw.storage.base import Store
 from sanfuclaw.storage.sqlite import SQLiteStore
 
 logger = logging.getLogger(__name__)
@@ -28,10 +27,13 @@ class GatewayServer:
 
     def __init__(self, settings: Settings):
         self.settings = settings
-        self.store: SQLiteStore | None = None
+        self.store: Store | None = None
         self.session_manager: SessionManager | None = None
         self._router = None
-        self._active_connections: dict[str, WebSocket] = {}
+        # Two distinct keyings: by transient WS conn id (for per-connection
+        # bookkeeping) and by resolved session id (for routing replies back).
+        self._ws_by_conn: dict[str, WebSocket] = {}
+        self._ws_by_session: dict[str, WebSocket] = {}
         self._mcp_manager = None
         self.app = self._create_app()
 
@@ -66,7 +68,7 @@ class GatewayServer:
         async def status():
             return {
                 "version": "0.1.0",
-                "connections": len(self._active_connections),
+                "connections": len(self._ws_by_conn),
                 "provider": self.settings.llm.provider,
                 "model": self.settings.llm.model,
             }
@@ -75,15 +77,7 @@ class GatewayServer:
         async def list_sessions():
             if not self.store:
                 return []
-            db = self.store._ensure_db()
-            async with db.execute(
-                "SELECT id, channel_id, sender_id, created_at, updated_at FROM sessions ORDER BY updated_at DESC LIMIT 50"
-            ) as cursor:
-                rows = await cursor.fetchall()
-                return [
-                    {"id": r[0], "channel_id": r[1], "sender_id": r[2], "created_at": r[3], "updated_at": r[4]}
-                    for r in rows
-                ]
+            return await self.store.list_sessions(limit=50)
 
         @app.get("/api/sessions/{session_id}/messages")
         async def get_messages(session_id: str, limit: int = 50):
@@ -100,7 +94,7 @@ class GatewayServer:
         async def websocket_endpoint(ws: WebSocket):
             await ws.accept()
             conn_id = f"ws-{id(ws)}"
-            self._active_connections[conn_id] = ws
+            self._ws_by_conn[conn_id] = ws
             logger.info(f"WebSocket connected: {conn_id}")
 
             try:
@@ -110,7 +104,10 @@ class GatewayServer:
             except WebSocketDisconnect:
                 logger.info(f"WebSocket disconnected: {conn_id}")
             finally:
-                self._active_connections.pop(conn_id, None)
+                self._ws_by_conn.pop(conn_id, None)
+                # Drop any session→ws entries pointing at this socket.
+                for sid in [s for s, w in self._ws_by_session.items() if w is ws]:
+                    self._ws_by_session.pop(sid, None)
 
         # --- WebChat UI ---
         webchat_dir = Path(__file__).parent.parent / "webchat"
@@ -125,62 +122,15 @@ class GatewayServer:
         return app
 
     async def _setup_router(self):
-        """Set up the agent router."""
-        from sanfuclaw.agents.llm_agent import LLMAgent
-        from sanfuclaw.gateway.router import Router
-        from sanfuclaw.mcp_client.manager import MCPManager
-        from sanfuclaw.mcp_client.tool_adapter import MCPToolAdapter
-        from sanfuclaw.skills.registry import SkillRegistry
-        from sanfuclaw.tools.registry import ToolRegistry
-        from sanfuclaw.tools.shell import ShellTool
-        from sanfuclaw.tools.skill_loader import LoadSkillTool
-        from sanfuclaw.tools.web_fetch import WebFetchTool
+        """Wire tools/MCP/agent/router via the shared factory, then attach the WS channel."""
+        from sanfuclaw.gateway.wiring import build_router
 
-        skill_registry = SkillRegistry(self.settings.skills.dir)
+        wiring = await build_router(self.settings, self.session_manager)
+        self._mcp_manager = wiring.mcp_manager
+        self._router = wiring.router
 
-        tool_registry = ToolRegistry()
-        tool_registry.register(ShellTool())
-        tool_registry.register(WebFetchTool())
-        if len(skill_registry) > 0:
-            tool_registry.register(LoadSkillTool(skill_registry))
-
-        self._mcp_manager = MCPManager(self.settings.mcp.servers)
-        await self._mcp_manager.start()
-        for server_name, mcp_tool in self._mcp_manager.tools():
-            session = self._mcp_manager.get_session(server_name)
-            tool_registry.register(MCPToolAdapter(server_name, mcp_tool, session))
-
-        transport = self._build_transport()
-        agent = LLMAgent(
-            name="default",
-            transport=transport,
-            tool_registry=tool_registry,
-            skill_registry=skill_registry,
-            system_prompt=self.settings.llm.system_prompt,
-            model=self.settings.llm.model,
-            max_tokens=self.settings.llm.max_tokens,
-            temperature=self.settings.llm.temperature,
-        )
-
-        self._router = Router(session_manager=self.session_manager)
-        self._router.register_agent(agent, default=True)
-
-        # Register a WebSocket pseudo-channel
         ws_channel = WSChannel(self)
         self._router.register_channel(ws_channel)
-
-    def _build_transport(self):
-        api_key = self.settings.llm.api_key or os.environ.get("ANTHROPIC_API_KEY", "") or os.environ.get("LLM_API_KEY", "")
-        if self.settings.llm.provider == "anthropic":
-            from sanfuclaw.agents.transports.anthropic import AnthropicTransport
-            return AnthropicTransport(api_key=api_key, default_model=self.settings.llm.model)
-        else:
-            from sanfuclaw.agents.transports.openai_compat import OpenAICompatTransport
-            return OpenAICompatTransport(
-                api_key=api_key,
-                base_url=self.settings.llm.base_url,
-                default_model=self.settings.llm.model,
-            )
 
     async def _handle_ws_message(self, ws: WebSocket, conn_id: str, raw: str):
         """Handle incoming WebSocket message (JSON wire protocol)."""
@@ -206,8 +156,8 @@ class GatewayServer:
             )
             envelope = Envelope(message=message, source_channel="webchat")
 
-            # Store the WebSocket connection for this session
-            self._active_connections[session_id] = ws
+            # Map this session id to the WS so reply chunks find their socket.
+            self._ws_by_session[session_id] = ws
 
             # Route through the agent
             if self._router:
@@ -221,12 +171,12 @@ class GatewayServer:
 
     async def send_to_ws(self, session_id: str, msg_type: str, data: str):
         """Send a message to the WebSocket client for a session."""
-        ws = self._active_connections.get(session_id)
+        ws = self._ws_by_session.get(session_id)
         if ws:
             try:
                 await ws.send_json({"type": msg_type, "data": data})
             except Exception:
-                self._active_connections.pop(session_id, None)
+                self._ws_by_session.pop(session_id, None)
 
 
 class WSChannel:
