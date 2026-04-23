@@ -111,8 +111,61 @@ def _resolve_config_path(path: str | Path | None) -> Path | None:
 def _read_config(path: Path) -> dict[str, Any]:
     suffix = path.suffix.lower()
     if suffix == ".json":
-        return json.loads(path.read_text())
+        return json.loads(_strip_line_comments(path.read_text()))
     if suffix == ".toml":
         with open(path, "rb") as f:
             return tomllib.load(f)
     raise ValueError(f"Unsupported config format: {path} (expected .json or .toml)")
+
+
+def _strip_line_comments(text: str) -> str:
+    """Relax strict JSON into a minimal JSON5-ish dialect so the default
+    template can ship commented-out channel/MCP examples.
+
+    Accepts:
+    - whole-line `//` comments (line must start with `//` after any indent)
+    - trailing commas before `}` or `]`
+
+    Both are walked with string-state tracking so URLs like
+    `"https://..."` and literal commas inside strings are preserved.
+    Good enough for a human-edited config file, not a general JSON5 parser.
+    """
+    # Pass 1: strip whole-line `//` comments.
+    without_comments = "\n".join(
+        "" if line.lstrip().startswith("//") else line
+        for line in text.splitlines()
+    )
+
+    # Pass 2: drop trailing commas before `}` / `]`, tracking strings so
+    # commas inside string values stay put.
+    out: list[str] = []
+    i = 0
+    in_string = False
+    s = without_comments
+    while i < len(s):
+        ch = s[i]
+        if in_string:
+            out.append(ch)
+            if ch == "\\" and i + 1 < len(s):
+                out.append(s[i + 1])
+                i += 2
+                continue
+            if ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == ",":
+            j = i + 1
+            while j < len(s) and s[j].isspace():
+                j += 1
+            if j < len(s) and s[j] in "}]":
+                i += 1  # skip the comma
+                continue
+        out.append(ch)
+        i += 1
+    return "".join(out)

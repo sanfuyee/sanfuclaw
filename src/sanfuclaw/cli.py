@@ -19,10 +19,61 @@ from sanfuclaw.cli_cron import cron_app
 app.add_typer(cron_app, name="cron")
 
 
-def _default_config_dict() -> dict:
-    """Single source of truth for the on-disk default config — derived from Settings()."""
+def _default_config_text() -> str:
+    """On-disk default config — live defaults from Settings() with commented-out
+    channel/MCP examples inline so users enable integrations by uncommenting.
+
+    The loader tolerates `//` line comments (see `core.config._strip_line_comments`),
+    so the file stays valid as users edit it."""
     from sanfuclaw.core.config import Settings
-    return Settings().model_dump(mode="json")
+
+    s = Settings()
+    # System prompt is long; JSON-escape it so embedded quotes survive.
+    import json as _json
+    system_prompt = _json.dumps(s.llm.system_prompt)
+
+    return f'''{{
+  "llm": {{
+    "provider": "{s.llm.provider}",
+    "model": "{s.llm.model}",
+    "api_key": "",
+    "base_url": "{s.llm.base_url}",
+    "max_tokens": {s.llm.max_tokens},
+    "max_tool_rounds": {s.llm.max_tool_rounds},
+    "temperature": {s.llm.temperature},
+    "system_prompt": {system_prompt}
+  }},
+  "timezone": "{s.timezone}",
+  "gateway": {{
+    "host": "{s.gateway.host}",
+    "port": {s.gateway.port}
+  }},
+  "channels": {{
+    // Uncomment a block and fill in credentials to enable a channel.
+    // "telegram": {{
+    //   "type": "telegram",
+    //   "bot_token": "YOUR_BOT_TOKEN",
+    //   "allowed_users": []
+    // }},
+    // "discord": {{
+    //   "type": "discord",
+    //   "bot_token": "YOUR_BOT_TOKEN"
+    // }}
+  }},
+  "skills": {{
+    "dir": "{s.skills.dir}"
+  }},
+  "mcp": {{
+    "servers": {{
+      // See README for recommended servers (filesystem, git, time, …).
+      // "filesystem": {{
+      //   "command": "npx",
+      //   "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+      // }}
+    }}
+  }}
+}}
+'''
 
 
 def _ensure_home_initialized() -> None:
@@ -31,12 +82,11 @@ def _ensure_home_initialized() -> None:
     Runs before every CLI invocation so `pip install` + any `sanfuclaw` command
     produces a ready-to-edit config with no extra setup step.
     """
-    import json as _json
     from sanfuclaw.core import paths
 
     cfg = paths.config_file()
     if not cfg.exists():
-        cfg.write_text(_json.dumps(_default_config_dict(), indent=2) + "\n")
+        cfg.write_text(_default_config_text())
         console.print(f"[dim]First run — created {cfg}[/dim]")
     paths.skills_dir()
 
@@ -94,14 +144,26 @@ async def _run(
         console.print(f"[dim]Loaded {len(wiring.mcp_manager.tools())} MCP tool(s)[/dim]")
 
     router = wiring.router
+    is_all = channel_mode == "all"
 
-    # Build channels
-    channels = []
+    # Build channels. In `all` mode any per-channel failure is logged and
+    # skipped so the remaining channels keep working; in single-channel
+    # mode it stays a hard error because the user explicitly asked for
+    # that channel.
+    candidates: list = []
+    skipped: list[tuple[str, str]] = []
+
+    def _fail(name: str, reason: str) -> None:
+        if is_all:
+            skipped.append((name, reason))
+        else:
+            console.print(f"[red]Error:[/red] {reason}")
+            raise typer.Exit(1)
 
     if channel_mode in ("cli", "all"):
         from sanfuclaw.channels.cli_channel import CLIChannel
 
-        # Resolve session for CLI: default is a new session each time
+        # Resolve session for CLI: default is a new session each time.
         if resume:
             resolved = await _resolve_session(store, resume)
             if not resolved:
@@ -112,44 +174,73 @@ async def _run(
         else:
             import uuid
             cli_session_id = f"cli-{uuid.uuid4().hex[:8]}"
-
-        cli = CLIChannel(session_id=cli_session_id)
-        router.register_channel(cli)
-        channels.append(cli)
+        candidates.append(CLIChannel(session_id=cli_session_id))
 
     if channel_mode in ("telegram", "all"):
         tg_config = settings.channels.get("telegram")
-        bot_token = None
-        if tg_config:
-            bot_token = getattr(tg_config, "bot_token", "") or ""
+        bot_token = getattr(tg_config, "bot_token", "") if tg_config else ""
         bot_token = bot_token or os.environ.get("TELEGRAM_BOT_TOKEN", "")
         if not bot_token:
-            console.print("[red]Error:[/red] Telegram bot token not found. Set channels.telegram.bot_token in config or TELEGRAM_BOT_TOKEN env var")
-            raise typer.Exit(1)
-
-        from sanfuclaw.channels.telegram import TelegramChannel
-        allowed = getattr(tg_config, "allowed_users", None) if tg_config else None
-        tg = TelegramChannel(bot_token=bot_token, allowed_users=allowed)
-        router.register_channel(tg)
-        channels.append(tg)
+            _fail(
+                "telegram",
+                "Telegram bot token not found. Set channels.telegram.bot_token "
+                "in config or TELEGRAM_BOT_TOKEN env var.",
+            )
+        else:
+            from sanfuclaw.channels.telegram import TelegramChannel
+            allowed = getattr(tg_config, "allowed_users", None) if tg_config else None
+            candidates.append(TelegramChannel(bot_token=bot_token, allowed_users=allowed))
 
     if channel_mode in ("weixin", "all"):
         from sanfuclaw.channels.weixin import WeixinChannel
         wx = WeixinChannel()
         if not wx._creds.is_valid:
-            console.print("[red]Error:[/red] WeChat not logged in. Run 'sanfuclaw weixin-login' first.")
-            raise typer.Exit(1)
-        router.register_channel(wx)
-        channels.append(wx)
+            _fail(
+                "weixin",
+                "WeChat not logged in. Run 'sanfuclaw weixin-login' first "
+                "(generates ~/.sanfuclaw/weixin_credentials.json).",
+            )
+        else:
+            candidates.append(wx)
 
-    if not channels:
+    if not candidates and not skipped:
         console.print(f"[red]Error:[/red] Unknown channel: {channel_mode}")
         raise typer.Exit(1)
 
-    # Start all channels, then start runtime services (scheduler) — order
-    # matters: scheduler routes through channels, so they must exist first.
-    for ch in channels:
-        await ch.start()
+    # Start each channel tolerantly. Only register with the router after a
+    # successful start so a failed channel never ends up holding outbound
+    # messages it can't deliver.
+    channels = []
+    for ch in candidates:
+        try:
+            await ch.start()
+        except Exception as e:
+            reason = f"start() failed: {e}"
+            if is_all:
+                console.print(f"[yellow]Warning:[/yellow] channel '{ch.name}' {reason}")
+                skipped.append((ch.name, reason))
+                continue
+            console.print(f"[red]Error:[/red] channel '{ch.name}' {reason}")
+            raise typer.Exit(1)
+        router.register_channel(ch)
+        channels.append(ch)
+
+    if not channels:
+        console.print("[red]Error:[/red] No channels could be started.")
+        for name, reason in skipped:
+            console.print(f"  - [yellow]{name}[/yellow]: {reason}")
+        raise typer.Exit(1)
+
+    if skipped:
+        console.print(
+            f"[yellow]Running with {len(channels)} channel(s); "
+            f"{len(skipped)} skipped:[/yellow]"
+        )
+        for name, reason in skipped:
+            console.print(f"  - [yellow]{name}[/yellow]: {reason}")
+
+    # Start runtime services (scheduler) — order matters: scheduler routes
+    # through channels, so they must be registered first.
     await wiring.start_runtime()
 
     try:
@@ -312,7 +403,6 @@ def init(
     force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing config"),
 ):
     """Create ~/.sanfuclaw/config.json with a default template."""
-    import json as _json
     from sanfuclaw.core import paths
 
     cfg = paths.config_file()
@@ -321,7 +411,7 @@ def init(
         console.print("Use [bold]--force[/bold] to overwrite, or edit the file directly.")
         raise typer.Exit(0)
 
-    cfg.write_text(_json.dumps(_default_config_dict(), indent=2) + "\n")
+    cfg.write_text(_default_config_text())
     paths.skills_dir()  # ensure skills/ exists
     console.print(f"[green]Created:[/green] {cfg}")
     console.print(f"[dim]Skills dir: {paths.home() / 'skills'}[/dim]")

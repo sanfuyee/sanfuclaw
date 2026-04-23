@@ -13,17 +13,23 @@
 
 ## 通用准备
 
-把代码装到独立 venv，避免污染系统 Python，路径也好写死到 service 里。
+把代码装到独立 venv，避免污染系统 Python，venv 路径后面会写死到 service 里。
+下文以仓库目录 `~/sanfuclaw` 为例，venv 放在 `~/sanfuclaw/.venv`（和 README 的安装步骤保持一致）。
 
 ```bash
-python3.12 -m venv ~/.sanfuclaw/venv
-~/.sanfuclaw/venv/bin/pip install -e /path/to/sanfuclaw
+git clone https://github.com/sanfuyee/sanfuclaw.git ~/sanfuclaw
+cd ~/sanfuclaw
+
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install -e .
 ```
 
-确认 CLI 能用：
+确认 CLI 能用（不激活 venv 也能直接调）：
 
 ```bash
-~/.sanfuclaw/venv/bin/sanfuclaw --help
+~/sanfuclaw/.venv/bin/sanfuclaw --help
 ```
 
 第一次运行任何 `sanfuclaw` 子命令会自动生成 `~/.sanfuclaw/config.json` 模板，按需填好 `llm.api_key`、`channels.*`、`mcp.servers.*` 即可。
@@ -55,7 +61,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=%h/.sanfuclaw/venv/bin/sanfuclaw start --channel all
+ExecStart=%h/sanfuclaw/.venv/bin/sanfuclaw start --channel all
 WorkingDirectory=%h
 StandardInput=null
 Restart=on-failure
@@ -77,7 +83,7 @@ Wants=network-online.target
 
 [Service]
 Type=simple
-ExecStart=%h/.sanfuclaw/venv/bin/sanfuclaw serve
+ExecStart=%h/sanfuclaw/.venv/bin/sanfuclaw serve
 WorkingDirectory=%h
 Restart=on-failure
 RestartSec=5
@@ -130,7 +136,7 @@ alias sfc-status='systemctl --user status sanfuclaw-agent sanfuclaw-serve'
   <key>Label</key><string>com.sanfuclaw.agent</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/YOUR_USER/.sanfuclaw/venv/bin/sanfuclaw</string>
+    <string>/Users/YOUR_USER/sanfuclaw/.venv/bin/sanfuclaw</string>
     <string>start</string>
     <string>--channel</string><string>all</string>
   </array>
@@ -157,7 +163,7 @@ alias sfc-status='systemctl --user status sanfuclaw-agent sanfuclaw-serve'
   <key>Label</key><string>com.sanfuclaw.serve</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/YOUR_USER/.sanfuclaw/venv/bin/sanfuclaw</string>
+    <string>/Users/YOUR_USER/sanfuclaw/.venv/bin/sanfuclaw</string>
     <string>serve</string>
   </array>
   <key>RunAtLoad</key><true/>
@@ -191,9 +197,9 @@ tail -f ~/.sanfuclaw/agent.log                                     # 看日志
 不想配 daemon、就想跑起来看看：
 
 ```bash
-nohup ~/.sanfuclaw/venv/bin/sanfuclaw start --channel all \
+nohup ~/sanfuclaw/.venv/bin/sanfuclaw start --channel all \
   < /dev/null > ~/.sanfuclaw/agent.log 2>&1 &
-nohup ~/.sanfuclaw/venv/bin/sanfuclaw serve \
+nohup ~/sanfuclaw/.venv/bin/sanfuclaw serve \
   < /dev/null > ~/.sanfuclaw/serve.log 2>&1 &
 ```
 
