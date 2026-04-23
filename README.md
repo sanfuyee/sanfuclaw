@@ -19,14 +19,37 @@ A local-first personal AI agent inspired by [OpenClaw](https://github.com/opencl
 
 ### Install
 
+Requires Python ≥ 3.12. Recommended: install into an isolated venv so it
+doesn't pollute the system Python.
+
 ```bash
-pip install -e .   # installs everything; channels & MCP activate based on config
+# 1. Get the code
+git clone https://github.com/sanfuyee/sanfuclaw.git
+cd sanfuclaw
+
+# 2. Create and activate a venv
+python3 -m venv .venv
+source .venv/bin/activate              # Windows: .venv\Scripts\activate
+
+# 3. Upgrade pip (avoids resolver warnings on older base pythons)
+python -m pip install --upgrade pip
+
+# 4. Install (editable — source edits take effect immediately)
+pip install -e .
+
+# 5. Verify
+sanfuclaw --help
 ```
 
 All channel and MCP dependencies are bundled. The runtime only starts what you
 declare in your config file (e.g. a Telegram bot under `[channels.telegram]`,
 an MCP server under `[mcp.servers.*]`), so unused integrations cost nothing
 beyond install size.
+
+> Every new shell needs `source .venv/bin/activate` before `sanfuclaw` is on
+> `PATH`. For a background service (systemd / launchd) you skip activation
+> entirely — point the unit at `<repo>/.venv/bin/sanfuclaw` directly. See
+> [docs/deployment.md](docs/deployment.md).
 
 The first time you run any `sanfuclaw` command it auto-creates
 `~/.sanfuclaw/config.json` (template) and `~/.sanfuclaw/skills/`. No
