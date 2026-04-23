@@ -20,11 +20,13 @@ A local-first personal AI agent inspired by [OpenClaw](https://github.com/opencl
 ### Install
 
 ```bash
-pip install -e .                          # core only
-pip install -e ".[telegram,weixin,mcp]"   # with optional channels + MCP
+pip install -e .   # installs everything; channels & MCP activate based on config
 ```
 
-Extras are `telegram`, `weixin`, `mcp` — pick any combination.
+All channel and MCP dependencies are bundled. The runtime only starts what you
+declare in your config file (e.g. a Telegram bot under `[channels.telegram]`,
+an MCP server under `[mcp.servers.*]`), so unused integrations cost nothing
+beyond install size.
 
 The first time you run any `sanfuclaw` command it auto-creates
 `~/.sanfuclaw/config.json` (template) and `~/.sanfuclaw/skills/`. No
@@ -73,37 +75,64 @@ remove it yourself.
 
 ### Run
 
+There are two equivalent entry points — pick whichever fits the situation:
+
+| Form | When to use |
+|------|-------------|
+| `python -m sanfuclaw <cmd>` | Source/debug mode — run straight out of a checkout, no install required beyond `pip install -e .`. Good for iterating on code, reading tracebacks against the working tree, running with a non-default Python. |
+| `sanfuclaw <cmd>` | Installed entry point — registered by `[project.scripts]`. Good for daily use, shell aliases, and background service units (systemd / launchd). |
+
+Both resolve to the same CLI; all flags, subcommands, and exit codes are identical.
+
 ```bash
 # CLI chat mode
-python -m sanfuclaw start
+sanfuclaw start
+python -m sanfuclaw start                 # equivalent (debug mode)
 
-# Telegram bot
-python -m sanfuclaw start --channel telegram
+# Single messaging channel
+sanfuclaw start --channel telegram
 
-# Both CLI + Telegram
-python -m sanfuclaw start --channel all
+# All channels declared in config (Telegram + WeChat + Discord + …)
+sanfuclaw start --channel all
 
 # Gateway server (WebChat + REST API + WebSocket)
-python -m sanfuclaw serve
+sanfuclaw serve
 
 # Session management
-python -m sanfuclaw sessions              # List recent sessions
-python -m sanfuclaw sessions -n 20        # Show more sessions
-python -m sanfuclaw sessions --channel cli # Filter by channel
-python -m sanfuclaw start --resume <ID>   # Resume a session (prefix match)
+sanfuclaw sessions                        # List recent sessions
+sanfuclaw sessions -n 20                  # Show more sessions
+sanfuclaw sessions --channel cli          # Filter by channel
+sanfuclaw start --resume <ID>             # Resume a session (prefix match)
 
 # Scheduled tasks (cron-driven prompts)
-python -m sanfuclaw cron add "0 8 * * *" --channel telegram --prompt "今日天气和待办"
-python -m sanfuclaw cron list
-python -m sanfuclaw cron disable <ID>     # pause without deleting
-python -m sanfuclaw cron remove <ID>
+sanfuclaw cron add "0 8 * * *" --channel telegram --prompt "今日天气和待办"
+sanfuclaw cron list
+sanfuclaw cron disable <ID>               # pause without deleting
+sanfuclaw cron remove <ID>
 
 # Or ask in chat directly (agent uses schedule tools):
-# "每天下午2点给我发明天的天气"
+#   "每天下午2点给我发明天的天气"
 
 # Cron is interpreted in your configured timezone (default: Asia/Shanghai)
 # Set top-level `timezone` in ~/.sanfuclaw/config.json or sanfuclaw.toml
 ```
+
+### Run as a background service
+
+For daily use, run the installed entry point under a process manager so the
+agent survives logout and auto-restarts on failure:
+
+```bash
+# macOS / Linux — quick foreground check first
+sanfuclaw start --channel all     # messaging channels (Telegram, WeChat, …)
+sanfuclaw serve                   # WebChat + REST + WebSocket gateway
+
+# Then wire both commands into systemd (Linux) or launchd (macOS).
+```
+
+See [docs/deployment.md](docs/deployment.md) for the full setup: venv layout,
+user-level systemd units with `loginctl enable-linger`, launchd `.plist`
+files, logging, auto-restart, and config-change restarts.
 
 ## Architecture
 
@@ -241,8 +270,8 @@ args = ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
 url = "https://example.com/mcp/sse"
 ```
 
-Install the extra: `pip install -e ".[mcp]"`. Tools appear in the registry
-as `mcp_<server>_<tool>`.
+The MCP client is bundled with the base install — no extra step. Tools appear
+in the registry as `mcp_<server>_<tool>`.
 
 #### Recommended servers
 
