@@ -1,0 +1,110 @@
+{
+  // Sanfuclaw configuration example.
+  //
+  // On first run, `sanfuclaw` generates ~/.sanfuclaw/config.json from the
+  // defaults in src/sanfuclaw/core/config.py. This file is a richer reference
+  // showing every knob plus commented-out channel and MCP examples.
+  //
+  // The loader accepts whole-line `//` comments and trailing commas (see
+  // core/config.py::_strip_line_comments). Inline trailing comments are NOT
+  // supported — each `//` must start the line. Secrets can come from env
+  // vars prefixed with SANFUCLAW_ (e.g. SANFUCLAW_LLM__API_KEY).
+
+  "llm": {
+    // provider: "openai_compat" or "anthropic"
+    "provider": "openai_compat",
+    "model": "zai-org/glm-5.1",
+    // api_key: leave empty and set env SANFUCLAW_LLM__API_KEY instead
+    "api_key": "",
+    "base_url": "https://api.hpc-ai.com/inference/v1",
+    // max_tokens: max output tokens per turn
+    "max_tokens": 8192,
+    // context_window: model's total context (input + output)
+    "context_window": 200000,
+    "max_tool_rounds": 10,
+    "temperature": 0.7,
+    "system_prompt": "You are a helpful personal AI assistant called Sanfuclaw. You are running locally on the user's machine. Be concise and helpful."
+  },
+
+  // timezone: used for cron scheduling
+  "timezone": "Asia/Shanghai",
+
+  "gateway": {
+    "host": "127.0.0.1",
+    "port": 30423
+  },
+
+  "channels": {
+    // Uncomment a block and fill in credentials to enable a channel.
+    // "telegram": {
+    //   "type": "telegram",
+    //   "bot_token": "YOUR_BOT_TOKEN",
+    //   "allowed_users": []
+    // },
+    // "discord": {
+    //   "type": "discord",
+    //   "bot_token": "YOUR_BOT_TOKEN"
+    // }
+  },
+
+  // Skills — markdown files with frontmatter, discovered on startup.
+  // The LLM sees a `name: description` summary and calls `load_skill`
+  // lazily when a request matches.
+  "skills": {
+    "dir": "~/.sanfuclaw/skills"
+  },
+
+  // MCP (Model Context Protocol) servers.
+  // Install the extra first: `pip install -e ".[mcp]"`.
+  // Each server is either spawned over stdio (command/args/env) or reached
+  // over SSE (url). Tools get registered as `mcp_<server>_<tool>` and are
+  // called by the LLM like any built-in tool.
+  //
+  // Every enabled server adds its tool schemas to the LLM request on *every*
+  // turn (filesystem alone is ~2.5k input tokens). Prompt caching drops
+  // repeat turns to ~10% of that. Still: enable only what you need.
+  "mcp": {
+    "servers": {
+      // // Sandboxed filesystem access (reads/writes under the given dir)
+      // "filesystem": {
+      //   "command": "npx",
+      //   "args": ["-y", "@modelcontextprotocol/server-filesystem", "/tmp"]
+      // },
+      // // Structured git operations (log, diff, blame, show) — needs `uv`
+      // "git": {
+      //   "command": "uvx",
+      //   "args": ["mcp-server-git", "--repository", "."]
+      // },
+      // // Timezone-aware current time — fixes "what's today's date" confusion
+      // "time": {
+      //   "command": "uvx",
+      //   "args": ["mcp-server-time"]
+      // },
+      // // Structured step-by-step reasoning
+      // "sequential-thinking": {
+      //   "command": "npx",
+      //   "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+      // },
+      // // URL fetcher with robots.txt handling + markdown conversion
+      // "fetch": {
+      //   "command": "uvx",
+      //   "args": ["mcp-server-fetch"]
+      // },
+      // // Servers that need an API key or token — pass secrets via `env`:
+      // "github": {
+      //   "command": "npx",
+      //   "args": ["-y", "@modelcontextprotocol/server-github"],
+      //   "env": { "GITHUB_PERSONAL_ACCESS_TOKEN": "ghp_xxx" }
+      // },
+      // // Remote MCP server over SSE:
+      // "remote": {
+      //   "url": "https://mcp.example.com/sse"
+      // },
+      // // Any server can be temporarily disabled without removing its config:
+      // "some-name": {
+      //   "enabled": false,
+      //   "command": "..."
+      // }
+    }
+  }
+}
