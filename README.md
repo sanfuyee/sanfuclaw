@@ -65,16 +65,13 @@ directory itself with `$SANFUCLAW_HOME`.
 ### Uninstall
 
 ```bash
-sanfuclaw uninstall --purge      # remove ~/.sanfuclaw/ AND the Python package
-sanfuclaw uninstall              # remove ~/.sanfuclaw/ only
-sanfuclaw uninstall --keep-config  # drop data, keep config.json
-pip uninstall sanfuclaw          # remove only the package (leaves ~/.sanfuclaw/)
+pip uninstall sanfuclaw    # remove the package
+rm -rf ~/.sanfuclaw/       # optional: drop user data (config, sessions, credentials)
 ```
 
-`pip install` / `pip uninstall` alone can't touch files outside the
-package directory (Python packaging has no post-install or pre-uninstall
-hooks), so the user-data dance lives in `sanfuclaw uninstall`.
-`--purge` wraps both steps into one command.
+`pip uninstall` removes only the Python package — Python packaging has no
+post-uninstall hook, so user data in `~/.sanfuclaw/` stays put unless you
+remove it yourself.
 
 ### Run
 
