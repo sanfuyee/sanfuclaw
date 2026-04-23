@@ -417,5 +417,7 @@ Known gaps, in rough priority order:
   `brave-search` via MCP, or rely on `web_fetch`.
 - No auth/pairing on the WebSocket gateway — fine for localhost, not
   safe to expose.
-- Scheduler has no agent-facing tool yet (the LLM can't add its own
-  schedules); CRUD is human-driven only. Intentional for now.
+- Scheduler now has agent-facing tools (`schedule_create`,
+  `schedule_list`, `schedule_set_enabled`, `schedule_remove`) so users
+  can create/manage schedules directly in chat; CLI CRUD remains
+  available via `sanfuclaw cron`.
