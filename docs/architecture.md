@@ -304,6 +304,35 @@ tools use. The agent's tool-calling loop is oblivious.
 Shutdown is a single `await self._stack.aclose()` — every transport and
 session is closed in reverse registration order.
 
+### Scheduler (`gateway/scheduler.py`)
+
+A schedule entry is just "at this cron time, send this prompt as a user
+message into `<target_channel>`". The `Scheduler`:
+
+1. Loads enabled `Schedule` rows from SQLite (`schedules` table).
+2. Runs a single async loop. Each tick: find rows whose `next_run_at`
+   has passed, fire them, recompute `next_run_at` via `croniter`, and
+   sleep until the next earliest run (capped at 60s so newly-added
+   entries get picked up without an explicit notify hook).
+3. To "fire", it synthesizes an `Envelope` with `source_channel =
+   target_channel` and routes it through the same `Router` everyone
+   else uses. The reply streams back to the target channel naturally —
+   the platform user sees a normal assistant message; nothing tells
+   them it came from cron.
+
+**Missed runs are silently skipped.** On startup we recompute
+`next_run_at` from `now()`; we never backfill. If sanfuclaw was off
+overnight, the 8am task simply runs at 8am the next day.
+
+The Scheduler is started via `Wiring.start_runtime()` *after* all
+channels are registered, since firing a schedule requires the target
+channel to exist on the router. Stopped via `Wiring.shutdown()`.
+
+CRUD lives in `cli_cron.py` (typer subcommands). The CLI commands
+operate on SQLite directly without spinning up the agent stack — a
+running `sanfuclaw start`/`serve` daemon picks up changes within one
+poll interval (≤60s).
+
 ### Gateway (`src/sanfuclaw/gateway/`)
 
 `GatewayServer` is a FastAPI app that exposes:
@@ -375,6 +404,8 @@ All core components are implemented:
   tool registry.
 - ✅ **Storage**: SQLite with session manager and history.
 - ✅ **Gateway**: FastAPI WebSocket + HTTP + WebChat UI.
+- ✅ **Scheduler**: cron-driven prompts that synthesize envelopes into
+  any registered channel; CLI CRUD via `sanfuclaw cron`.
 
 Known gaps, in rough priority order:
 
@@ -386,4 +417,5 @@ Known gaps, in rough priority order:
   `brave-search` via MCP, or rely on `web_fetch`.
 - No auth/pairing on the WebSocket gateway — fine for localhost, not
   safe to expose.
-- No cron / scheduled tasks. Deliberately punted.
+- Scheduler has no agent-facing tool yet (the LLM can't add its own
+  schedules); CRUD is human-driven only. Intentional for now.

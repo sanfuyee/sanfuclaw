@@ -9,6 +9,7 @@ from pathlib import Path
 import aiosqlite
 
 from sanfuclaw.core.message import Message
+from sanfuclaw.core.schedule import Schedule
 from sanfuclaw.core.session import Session
 from sanfuclaw.core.types import MessageRole
 
@@ -184,3 +185,87 @@ class SQLiteStore:
                 )
                 for row in rows
             ]
+
+    # --- Schedules ---
+
+    @staticmethod
+    def _row_to_schedule(row: tuple) -> Schedule:
+        return Schedule(
+            id=row[0],
+            cron=row[1],
+            prompt=row[2],
+            target_channel=row[3],
+            target_session=row[4],
+            enabled=bool(row[5]),
+            last_run_at=datetime.fromisoformat(row[6]) if row[6] else None,
+            next_run_at=datetime.fromisoformat(row[7]) if row[7] else None,
+            created_at=datetime.fromisoformat(row[8]),
+        )
+
+    async def add_schedule(self, schedule: Schedule) -> None:
+        db = self._ensure_db()
+        await db.execute(
+            """INSERT INTO schedules (id, cron, prompt, target_channel, target_session,
+                                       enabled, last_run_at, next_run_at, created_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                schedule.id,
+                schedule.cron,
+                schedule.prompt,
+                schedule.target_channel,
+                schedule.target_session,
+                int(schedule.enabled),
+                schedule.last_run_at.isoformat() if schedule.last_run_at else "",
+                schedule.next_run_at.isoformat() if schedule.next_run_at else "",
+                schedule.created_at.isoformat(),
+            ),
+        )
+        await db.commit()
+
+    async def get_schedule(self, schedule_id: str) -> Schedule | None:
+        db = self._ensure_db()
+        async with db.execute(
+            "SELECT id, cron, prompt, target_channel, target_session, enabled, "
+            "last_run_at, next_run_at, created_at FROM schedules WHERE id = ?",
+            (schedule_id,),
+        ) as cursor:
+            row = await cursor.fetchone()
+            return self._row_to_schedule(row) if row else None
+
+    async def list_schedules(self, enabled_only: bool = False) -> list[Schedule]:
+        db = self._ensure_db()
+        query = (
+            "SELECT id, cron, prompt, target_channel, target_session, enabled, "
+            "last_run_at, next_run_at, created_at FROM schedules"
+        )
+        if enabled_only:
+            query += " WHERE enabled = 1"
+        query += " ORDER BY created_at ASC"
+        async with db.execute(query) as cursor:
+            rows = await cursor.fetchall()
+            return [self._row_to_schedule(r) for r in rows]
+
+    async def update_schedule(self, schedule: Schedule) -> None:
+        db = self._ensure_db()
+        await db.execute(
+            """UPDATE schedules SET
+                   cron = ?, prompt = ?, target_channel = ?, target_session = ?,
+                   enabled = ?, last_run_at = ?, next_run_at = ?
+               WHERE id = ?""",
+            (
+                schedule.cron,
+                schedule.prompt,
+                schedule.target_channel,
+                schedule.target_session,
+                int(schedule.enabled),
+                schedule.last_run_at.isoformat() if schedule.last_run_at else "",
+                schedule.next_run_at.isoformat() if schedule.next_run_at else "",
+                schedule.id,
+            ),
+        )
+        await db.commit()
+
+    async def remove_schedule(self, schedule_id: str) -> None:
+        db = self._ensure_db()
+        await db.execute("DELETE FROM schedules WHERE id = ?", (schedule_id,))
+        await db.commit()

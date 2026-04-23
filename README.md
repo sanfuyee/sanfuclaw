@@ -10,6 +10,7 @@ A local-first personal AI agent inspired by [OpenClaw](https://github.com/opencl
 - **Skill plugins**: Markdown-based skills with frontmatter, lazy-loaded on demand
 - **MCP support**: Connect to any Model Context Protocol server over stdio or SSE
 - **Persistent sessions**: SQLite-backed conversation history with list/resume support
+- **Scheduled tasks**: cron-driven prompts that fire into any channel
 - **Gateway server**: FastAPI with WebSocket streaming, REST API, WebChat UI
 - **Event hooks**: Pluggable event system for custom integrations
 - **Streaming-first**: Real-time response streaming across all channels
@@ -90,6 +91,12 @@ python -m sanfuclaw sessions              # List recent sessions
 python -m sanfuclaw sessions -n 20        # Show more sessions
 python -m sanfuclaw sessions --channel cli # Filter by channel
 python -m sanfuclaw start --resume <ID>   # Resume a session (prefix match)
+
+# Scheduled tasks (cron-driven prompts)
+python -m sanfuclaw cron add "0 8 * * *" --channel telegram --prompt "今日天气和待办"
+python -m sanfuclaw cron list
+python -m sanfuclaw cron disable <ID>     # pause without deleting
+python -m sanfuclaw cron remove <ID>
 ```
 
 ## Architecture
