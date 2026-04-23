@@ -42,7 +42,17 @@ class TelegramChannel:
         await self._app.initialize()
         await self._app.start()
         await self._app.updater.start_polling(drop_pending_updates=True)
-        logger.info("Telegram channel started")
+        # getMe happens after initialize(); report the bot so users can confirm
+        # the token resolves to the expected account.
+        try:
+            me = await self._app.bot.get_me()
+            logger.info(
+                "Telegram channel started: bot=@%s id=%s allowlist=%s",
+                me.username, me.id,
+                len(self._allowed_users) if self._allowed_users else "open",
+            )
+        except Exception as e:
+            logger.warning("Telegram channel started but getMe failed: %s", e)
 
     async def stop(self) -> None:
         if self._app:

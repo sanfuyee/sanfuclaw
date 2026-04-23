@@ -296,7 +296,10 @@ class WeixinChannel:
 
         self._running = True
         self._poll_task = asyncio.create_task(self._poll_loop())
-        logger.info("WeChat channel started")
+        logger.info(
+            "WeChat channel started: base_url=%s bot_id=%s user_id=%s",
+            self._creds.base_url, self._creds.bot_id, self._creds.user_id,
+        )
 
     async def stop(self) -> None:
         self._running = False
