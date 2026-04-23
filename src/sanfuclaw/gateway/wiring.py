@@ -140,6 +140,7 @@ async def build_router(
         system_prompt=f"{settings.llm.system_prompt}\n\n{SCHEDULE_PROMPT_GUIDANCE}",
         model=settings.llm.model,
         max_tokens=settings.llm.max_tokens,
+        context_window=settings.llm.context_window,
         max_tool_rounds=settings.llm.max_tool_rounds,
         temperature=settings.llm.temperature,
     )

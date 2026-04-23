@@ -53,6 +53,7 @@ def _default_config_text() -> str:
     "api_key": "",
     "base_url": "{s.llm.base_url}",
     "max_tokens": {s.llm.max_tokens},
+    "context_window": {s.llm.context_window},
     "max_tool_rounds": {s.llm.max_tool_rounds},
     "temperature": {s.llm.temperature},
     "system_prompt": {system_prompt}
