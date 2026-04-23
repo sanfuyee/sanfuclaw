@@ -16,35 +16,39 @@ app = typer.Typer(
 console = Console()
 
 
+def _default_config_dict() -> dict:
+    """Single source of truth for the on-disk default config — derived from Settings()."""
+    from sanfuclaw.core.config import Settings
+    return Settings().model_dump(mode="json")
+
+
+def _ensure_home_initialized() -> None:
+    """First-run auto-init: create ~/.sanfuclaw/config.json + skills/ if missing.
+
+    Runs before every CLI invocation so `pip install` + any `sanfuclaw` command
+    produces a ready-to-edit config with no extra setup step.
+    """
+    import json as _json
+    from sanfuclaw.core import paths
+
+    cfg = paths.config_file()
+    if not cfg.exists():
+        cfg.write_text(_json.dumps(_default_config_dict(), indent=2) + "\n")
+        console.print(f"[dim]First run — created {cfg}[/dim]")
+    paths.skills_dir()
+
+
 @app.command()
 def start(
-    config: str = typer.Option("sanfuclaw.toml", "--config", "-c", help="Path to config file"),
+    config: str = typer.Option(None, "--config", "-c", help="Path to config file (default: ~/.sanfuclaw/config.json)"),
     model: str = typer.Option(None, "--model", "-m", help="Override LLM model"),
     provider: str = typer.Option(None, "--provider", "-p", help="Override LLM provider"),
     channel: str = typer.Option("cli", "--channel", help="Channel to run (cli, telegram, weixin, all)"),
     resume: str = typer.Option(None, "--resume", "-r", help="Resume a session by ID (prefix match supported)"),
 ):
     """Start the Sanfuclaw agent."""
+    _ensure_home_initialized()
     asyncio.run(_run(config, model, provider, channel, resume=resume))
-
-
-def _build_transport(settings):
-    """Create the LLM transport based on config."""
-    api_key = settings.llm.api_key or os.environ.get("ANTHROPIC_API_KEY", "") or os.environ.get("LLM_API_KEY", "")
-    if not api_key:
-        console.print("[red]Error:[/red] No API key found. Set api_key in sanfuclaw.toml or LLM_API_KEY env var")
-        raise typer.Exit(1)
-
-    if settings.llm.provider == "anthropic":
-        from sanfuclaw.agents.transports.anthropic import AnthropicTransport
-        return AnthropicTransport(api_key=api_key, default_model=settings.llm.model)
-    else:
-        from sanfuclaw.agents.transports.openai_compat import OpenAICompatTransport
-        return OpenAICompatTransport(
-            api_key=api_key,
-            base_url=settings.llm.base_url,
-            default_model=settings.llm.model,
-        )
 
 
 async def _run(
@@ -56,20 +60,12 @@ async def _run(
 ):
     """Main async entry point."""
     from sanfuclaw.core.config import Settings
-    from sanfuclaw.agents.llm_agent import LLMAgent
-    from sanfuclaw.gateway.router import Router
     from sanfuclaw.gateway.session_manager import SessionManager
+    from sanfuclaw.gateway.wiring import MissingAPIKey, build_router
     from sanfuclaw.storage.sqlite import SQLiteStore
-    from sanfuclaw.mcp_client.manager import MCPManager
-    from sanfuclaw.mcp_client.tool_adapter import MCPToolAdapter
-    from sanfuclaw.skills.registry import SkillRegistry
-    from sanfuclaw.tools.registry import ToolRegistry
-    from sanfuclaw.tools.shell import ShellTool
-    from sanfuclaw.tools.skill_loader import LoadSkillTool
-    from sanfuclaw.tools.web_fetch import WebFetchTool
 
     # Load config
-    settings = Settings.from_toml(config_path)
+    settings = Settings.load(config_path)
     if model:
         settings.llm.model = model
     if provider:
@@ -78,46 +74,23 @@ async def _run(
     # Set up storage and session manager
     store = SQLiteStore()
     await store.init()
-
     session_manager = SessionManager(store)
 
-    # Set up skills
-    skill_registry = SkillRegistry(settings.skills.dir)
-    if len(skill_registry) > 0:
-        console.print(f"[dim]Loaded {len(skill_registry)} skill(s) from {settings.skills.dir}[/dim]")
+    # Wire tools/MCP/agent/router via shared factory
+    try:
+        wiring = await build_router(settings, session_manager)
+    except MissingAPIKey as e:
+        console.print(f"[red]Error:[/red] {e}")
+        raise typer.Exit(1)
 
-    # Set up tools
-    tool_registry = ToolRegistry()
-    tool_registry.register(ShellTool())
-    tool_registry.register(WebFetchTool())
-    if len(skill_registry) > 0:
-        tool_registry.register(LoadSkillTool(skill_registry))
+    if len(wiring.skill_registry) > 0:
+        console.print(
+            f"[dim]Loaded {len(wiring.skill_registry)} skill(s) from {settings.skills.dir}[/dim]"
+        )
+    if wiring.mcp_manager.tools():
+        console.print(f"[dim]Loaded {len(wiring.mcp_manager.tools())} MCP tool(s)[/dim]")
 
-    # Set up MCP servers — start and register their tools
-    mcp_manager = MCPManager(settings.mcp.servers)
-    await mcp_manager.start()
-    for server_name, mcp_tool in mcp_manager.tools():
-        session = mcp_manager.get_session(server_name)
-        tool_registry.register(MCPToolAdapter(server_name, mcp_tool, session))
-    if mcp_manager.tools():
-        console.print(f"[dim]Loaded {len(mcp_manager.tools())} MCP tool(s)[/dim]")
-
-    # Set up transport and agent
-    transport = _build_transport(settings)
-    agent = LLMAgent(
-        name="default",
-        transport=transport,
-        tool_registry=tool_registry,
-        skill_registry=skill_registry,
-        system_prompt=settings.llm.system_prompt,
-        model=settings.llm.model,
-        max_tokens=settings.llm.max_tokens,
-        temperature=settings.llm.temperature,
-    )
-
-    # Set up router
-    router = Router(session_manager=session_manager)
-    router.register_agent(agent, default=True)
+    router = wiring.router
 
     # Build channels
     channels = []
@@ -199,7 +172,7 @@ async def _run(
     finally:
         for ch in channels:
             await ch.stop()
-        await mcp_manager.stop()
+        await wiring.shutdown()
         await store.close()
 
 
@@ -227,7 +200,7 @@ async def _resolve_session(store, session_id_prefix: str):
 
 @app.command()
 def sessions(
-    config: str = typer.Option("sanfuclaw.toml", "--config", "-c", help="Path to config file"),
+    config: str = typer.Option(None, "--config", "-c", help="Path to config file (default: ~/.sanfuclaw/config.json)"),
     limit: int = typer.Option(10, "--limit", "-n", help="Number of sessions to show"),
     channel_filter: str = typer.Option(None, "--channel", help="Filter by channel"),
 ):
@@ -279,7 +252,7 @@ async def _list_sessions(config_path: str, limit: int, channel_filter: str | Non
 
 @app.command()
 def serve(
-    config: str = typer.Option("sanfuclaw.toml", "--config", "-c", help="Path to config file"),
+    config: str = typer.Option(None, "--config", "-c", help="Path to config file (default: ~/.sanfuclaw/config.json)"),
     host: str = typer.Option(None, "--host", "-h", help="Override host"),
     port: int = typer.Option(None, "--port", help="Override port"),
 ):
@@ -288,7 +261,8 @@ def serve(
     from sanfuclaw.core.config import Settings
     from sanfuclaw.gateway.server import GatewayServer
 
-    settings = Settings.from_toml(config)
+    _ensure_home_initialized()
+    settings = Settings.load(config)
     server = GatewayServer(settings)
 
     final_host = host or settings.gateway.host
@@ -326,6 +300,92 @@ async def _weixin_login(base_url: str):
     except Exception as e:
         console.print(f"[red]Login failed:[/red] {e}")
         raise typer.Exit(1)
+
+
+@app.command()
+def init(
+    force: bool = typer.Option(False, "--force", "-f", help="Overwrite existing config"),
+):
+    """Create ~/.sanfuclaw/config.json with a default template."""
+    import json as _json
+    from sanfuclaw.core import paths
+
+    cfg = paths.config_file()
+    if cfg.exists() and not force:
+        console.print(f"[yellow]Config already exists:[/yellow] {cfg}")
+        console.print("Use [bold]--force[/bold] to overwrite, or edit the file directly.")
+        raise typer.Exit(0)
+
+    cfg.write_text(_json.dumps(_default_config_dict(), indent=2) + "\n")
+    paths.skills_dir()  # ensure skills/ exists
+    console.print(f"[green]Created:[/green] {cfg}")
+    console.print(f"[dim]Skills dir: {paths.home() / 'skills'}[/dim]")
+    console.print()
+    console.print("Next: edit the file and set [bold]llm.api_key[/bold], then run [bold]sanfuclaw start[/bold].")
+
+
+@app.command()
+def uninstall(
+    yes: bool = typer.Option(False, "--yes", "-y", help="Skip confirmation"),
+    keep_config: bool = typer.Option(False, "--keep-config", help="Keep config.json"),
+    purge: bool = typer.Option(False, "--purge", help="Also run `pip uninstall sanfuclaw`"),
+):
+    """Remove ~/.sanfuclaw/ (data, sessions, credentials).
+
+    Pass --purge to additionally uninstall the Python package in one go.
+    """
+    import shutil
+    import subprocess
+    import sys
+    from sanfuclaw.core import paths
+
+    home = paths.home()
+    home_exists = home.exists() and any(home.iterdir())
+
+    targets = []
+    if home_exists:
+        targets.append(str(home))
+    if purge:
+        targets.append("Python package 'sanfuclaw'")
+
+    if not targets:
+        console.print(f"[dim]Nothing to remove.[/dim]")
+        return
+
+    console.print("[bold]About to remove:[/bold]")
+    for t in targets:
+        console.print(f"  - {t}")
+    if home_exists:
+        contents = sorted(p.name for p in home.iterdir())
+        for name in contents:
+            console.print(f"      · {name}")
+
+    if not yes:
+        confirm = typer.confirm("Proceed?", default=False)
+        if not confirm:
+            console.print("[yellow]Aborted.[/yellow]")
+            raise typer.Exit(1)
+
+    if home_exists:
+        if keep_config:
+            cfg = paths.config_file()
+            backup = cfg.read_bytes() if cfg.exists() else None
+            shutil.rmtree(home)
+            if backup is not None:
+                paths.home()
+                cfg.write_bytes(backup)
+                console.print(f"[green]Removed data, kept:[/green] {cfg}")
+        else:
+            shutil.rmtree(home)
+            console.print(f"[green]Removed:[/green] {home}")
+
+    if purge:
+        console.print("[dim]Running `pip uninstall sanfuclaw -y`…[/dim]")
+        rc = subprocess.call([sys.executable, "-m", "pip", "uninstall", "-y", "sanfuclaw"])
+        if rc != 0:
+            console.print(f"[red]pip uninstall exited with code {rc}[/red]")
+            raise typer.Exit(rc)
+        console.print("[green]Package uninstalled.[/green]")
 
 
 @app.command()

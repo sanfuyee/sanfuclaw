@@ -40,18 +40,20 @@ class LLMAgent:
         self._max_tokens = max_tokens
         self._temperature = temperature
         self._max_history = max_history
+        # Per-turn diagnostic info (LLM steps, token usage). Populated each
+        # process() call. The router decides whether to surface this — only
+        # interactive channels (CLI) want it; user-facing channels skip it.
+        self.last_trace: str = ""
 
     def _build_messages(self, session: Session) -> list[dict]:
         """Build messages in the correct format for the current transport."""
-        # Trim history to max_history most recent messages
-        if len(session.history) > self._max_history:
-            session.history = session.history[-self._max_history:]
+        recent = session.history[-self._max_history:]
 
         fmt = getattr(self._transport, "message_format", "anthropic")
         if fmt == "openai":
-            return self._build_openai_tool_messages(session)
+            return self._build_openai_tool_messages(recent)
         else:
-            return self._build_anthropic_tool_messages(session)
+            return self._build_anthropic_tool_messages(recent)
 
     async def _stream_llm(
         self, messages: list[dict], tools: list[dict] | None,
@@ -163,7 +165,7 @@ class LLMAgent:
                 session_id=session.id,
             ))
 
-        # Append trace summary after the response
+        # Stash the per-turn trace for the router to deliver out-of-band.
         steps = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(trace))
         history_count = len(session.history)
         totals = []
@@ -172,17 +174,16 @@ class LLMAgent:
         if total_reasoning_tokens:
             totals.append(f"{total_reasoning_tokens} reasoning")
         totals_str = f" ({', '.join(totals)})" if totals else ""
-        yield (
-            f"\n\n---\n"
+        self.last_trace = (
             f"{steps}\n"
             f"  History: {history_count} msgs | "
             f"Total: {total_input_tokens} in / {total_output_tokens} out{totals_str}"
         )
 
-    def _build_anthropic_tool_messages(self, session: Session) -> list[dict]:
+    def _build_anthropic_tool_messages(self, history: list[Message]) -> list[dict]:
         """Build messages with tool use/results in Anthropic format."""
         messages = []
-        for msg in session.history:
+        for msg in history:
             if msg.role == MessageRole.ASSISTANT and "tool_calls" in msg.metadata:
                 content = []
                 if msg.content:
@@ -219,10 +220,10 @@ class LLMAgent:
             args = ", ".join(f"{k}={v!r}" for k, v in tool_input.items())
             return args[:150]
 
-    def _build_openai_tool_messages(self, session: Session) -> list[dict]:
+    def _build_openai_tool_messages(self, history: list[Message]) -> list[dict]:
         """Build messages with tool use/results in OpenAI format."""
         messages = []
-        for msg in session.history:
+        for msg in history:
             if msg.role == MessageRole.ASSISTANT and "tool_calls" in msg.metadata:
                 tool_calls = []
                 for tc in msg.metadata["tool_calls"]:

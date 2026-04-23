@@ -19,37 +19,62 @@ A local-first personal AI agent inspired by [OpenClaw](https://github.com/opencl
 ### Install
 
 ```bash
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
+pip install -e .
 
-# For Telegram support
-pip install -e ".[telegram]"
+# Optional channel/tool extras (combine in one command if you like):
+pip install -e ".[telegram]"   # Telegram channel
+pip install -e ".[weixin]"     # WeChat channel
+pip install -e ".[mcp]"        # MCP servers
+pip install -e ".[telegram,mcp]"
 ```
+
+The first time you run any `sanfuclaw` command it auto-creates
+`~/.sanfuclaw/config.json` (template) and `~/.sanfuclaw/skills/`. No
+extra setup step is required — just run `sanfuclaw --help` once, then
+edit the config.
 
 ### Configure
 
-Edit `sanfuclaw.toml`:
+Edit `~/.sanfuclaw/config.json`:
 
-```toml
-[llm]
-provider = "openai_compat"          # or "anthropic"
-model = "minimax/minimax-m2.5"
-base_url = "https://api.hpc-ai.com/inference/v1"
-api_key = "your-api-key"
-
-# Optional: Telegram bot
-[channels.telegram]
-type = "telegram"
-bot_token = "YOUR_BOT_TOKEN"
+```json
+{
+  "llm": {
+    "provider": "openai_compat",
+    "model": "moonshotai/kimi-k2.5",
+    "base_url": "https://api.hpc-ai.com/inference/v1",
+    "api_key": "your-api-key"
+  },
+  "channels": {
+    "telegram": { "type": "telegram", "bot_token": "YOUR_BOT_TOKEN" }
+  }
+}
 ```
 
-Or set API keys via environment variables:
+Or set secrets via environment variables:
 
 ```bash
 export LLM_API_KEY="your-key"
 export TELEGRAM_BOT_TOKEN="your-bot-token"
 ```
+
+Config resolution order: `--config <path>` → `$SANFUCLAW_CONFIG` →
+`~/.sanfuclaw/config.json` → `./sanfuclaw.toml` (legacy). Override the home
+directory itself with `$SANFUCLAW_HOME`.
+
+### Uninstall
+
+```bash
+sanfuclaw uninstall --purge      # remove ~/.sanfuclaw/ AND the Python package
+sanfuclaw uninstall              # remove ~/.sanfuclaw/ only
+sanfuclaw uninstall --keep-config  # drop data, keep config.json
+pip uninstall sanfuclaw          # remove only the package (leaves ~/.sanfuclaw/)
+```
+
+`pip install` / `pip uninstall` alone can't touch files outside the
+package directory (Python packaging has no post-install or pre-uninstall
+hooks), so the user-data dance lives in `sanfuclaw uninstall`.
+`--purge` wraps both steps into one command.
 
 ### Run
 
@@ -149,13 +174,16 @@ through the same channel. Tools, skills, and MCP servers all plug into a single
 - **One Envelope, many channels.** The Router is channel-agnostic; a
   per-channel `session_id` convention (`tg-<chat>`, `wx-<user>`, `ws-<conn>`,
   `cli-session`) lets the same storage/agent pipeline serve all of them.
-- **History trimming at the agent.** `LLMAgent` caps `session.history` to the
-  last N messages (default 20) before building the prompt, so long-running
-  sessions don't inflate token cost.
+- **History trimming at the agent.** `LLMAgent` slices the last N messages
+  (default 20) when building the prompt without mutating `session.history`,
+  so long-running sessions don't inflate token cost and the persisted record
+  stays complete.
 - **Usage tracking is first-class.** `StreamChunk` has a `USAGE` variant, and
   the OpenAI-compat transport de-duplicates providers that repeat usage in
-  every chunk. The agent appends a per-turn trace (tool calls + total in/out
-  tokens) to the response so you can see what happened.
+  every chunk. The agent stashes a per-turn trace (tool calls + total in/out
+  tokens) on `agent.last_trace`; the router delivers it out-of-band only to
+  channels that opt in via `wants_trace = True` (today, just CLI). User-facing
+  channels stay clean.
 - **Platform limitations are respected.** Telegram and WeChat can't render
   partial tokens, so their channels buffer the full response and send on
   `done=True`. CLI and WebChat stream in real time. All channels use the same
@@ -304,7 +332,7 @@ All key interfaces use `typing.Protocol` for structural subtyping:
 ```
 src/sanfuclaw/
   core/         # Message, Session, Config, Types, Errors
-  gateway/      # Router, Server, SessionManager, Hooks
+  gateway/      # Router, Server, SessionManager, Wiring (factory), Hooks
   agents/       # Agent protocol, LLM agent
     transports/ # Anthropic, OpenAI-compatible
   channels/     # CLI, Telegram, WeChat, WebChat
@@ -314,6 +342,14 @@ src/sanfuclaw/
   storage/      # SQLite backend
   webchat/      # Browser chat UI
 skills/         # User skill library (*.md)
+```
+
+## Contributing
+
+```bash
+pip install -e ".[dev]"   # adds pytest, pytest-asyncio, ruff, mypy
+pytest
+ruff check src/
 ```
 
 ## License
