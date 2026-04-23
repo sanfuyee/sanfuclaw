@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import logging
+
 from sanfuclaw.agents.base import Agent
 from sanfuclaw.channels.base import Channel
 from sanfuclaw.core.message import Envelope, Message
 from sanfuclaw.core.session import Session
 from sanfuclaw.gateway.session_manager import SessionManager
+
+logger = logging.getLogger(__name__)
 
 
 class Router:
@@ -43,7 +47,13 @@ class Router:
         agent = self.resolve_agent(envelope)
         channel = self._channels.get(envelope.source_channel)
         if not channel:
+            logger.error("Unknown channel %r — dropping envelope", envelope.source_channel)
             raise ValueError(f"Unknown channel: {envelope.source_channel}")
+
+        logger.debug(
+            "Routing envelope from %s → agent=%s session=%s",
+            envelope.source_channel, agent.name, session.id[:8],
+        )
 
         # All downstream channel calls use the resolved session.id, not the
         # incoming envelope's session_id (which may be empty or a placeholder

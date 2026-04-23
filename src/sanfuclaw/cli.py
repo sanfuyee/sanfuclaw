@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 
 import typer
 from rich.console import Console
+
+from sanfuclaw.core.logging import configure as _configure_logging
 
 app = typer.Typer(
     name="sanfuclaw",
@@ -14,9 +17,20 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+logger = logging.getLogger(__name__)
+
+
+@app.callback()
+def _main(ctx: typer.Context) -> None:
+    """Runs before every subcommand — install the stderr log handler so
+    module-level `logger.info(...)` calls surface under systemd / launchd."""
+    _configure_logging()
+
 
 from sanfuclaw.cli_cron import cron_app
+from sanfuclaw.cli_service import service_app
 app.add_typer(cron_app, name="cron")
+app.add_typer(service_app, name="service")
 
 
 def _default_config_text() -> str:
@@ -124,6 +138,11 @@ async def _run(
     if provider:
         settings.llm.provider = provider
 
+    logger.info(
+        "Starting sanfuclaw: mode=%s llm=%s/%s timezone=%s",
+        channel_mode, settings.llm.provider, settings.llm.model, settings.timezone,
+    )
+
     # Set up storage and session manager
     store = SQLiteStore()
     await store.init()
@@ -133,6 +152,7 @@ async def _run(
     try:
         wiring = await build_router(settings, store, session_manager)
     except MissingAPIKey as e:
+        logger.error("LLM API key missing: %s", e)
         console.print(f"[red]Error:[/red] {e}")
         raise typer.Exit(1)
 
@@ -226,6 +246,9 @@ async def _run(
         channels.append(ch)
 
     if not channels:
+        logger.error("No channels could be started (%d skipped)", len(skipped))
+        for name, reason in skipped:
+            logger.error("  skipped %s: %s", name, reason)
         console.print("[red]Error:[/red] No channels could be started.")
         for name, reason in skipped:
             console.print(f"  - [yellow]{name}[/yellow]: {reason}")
@@ -238,10 +261,17 @@ async def _run(
         )
         for name, reason in skipped:
             console.print(f"  - [yellow]{name}[/yellow]: {reason}")
+            logger.warning("Channel skipped %s: %s", name, reason)
+
+    logger.info(
+        "Channels active: %s",
+        ", ".join(ch.name for ch in channels) or "<none>",
+    )
 
     # Start runtime services (scheduler) — order matters: scheduler routes
     # through channels, so they must be registered first.
     await wiring.start_runtime()
+    logger.info("Runtime ready — listening for messages")
 
     try:
         if len(channels) == 1:
@@ -370,7 +400,10 @@ def serve(
     console.print(f"  WS:       ws://{final_host}:{final_port}/ws")
     console.print()
 
-    uvicorn.run(server.app, host=final_host, port=final_port, log_level="info")
+    logger.info("Gateway binding %s:%d", final_host, final_port)
+    # log_config=None — keep the root handler we installed in _main() so
+    # sanfuclaw module logs aren't stomped by uvicorn's default dictConfig.
+    uvicorn.run(server.app, host=final_host, port=final_port, log_config=None)
 
 
 @app.command()

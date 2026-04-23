@@ -47,9 +47,9 @@ an MCP server under `[mcp.servers.*]`), so unused integrations cost nothing
 beyond install size.
 
 > Every new shell needs `source .venv/bin/activate` before `sanfuclaw` is on
-> `PATH`. For a background service (systemd / launchd) you skip activation
-> entirely — point the unit at `<repo>/.venv/bin/sanfuclaw` directly. See
-> [docs/deployment.md](docs/deployment.md).
+> `PATH`. For a background service you skip activation — `sanfuclaw service
+> install` bakes the venv's absolute path into the unit file (see
+> [Run as a background service](#run-as-a-background-service)).
 
 The first time you run any `sanfuclaw` command it auto-creates
 `~/.sanfuclaw/config.json` (template) and `~/.sanfuclaw/skills/`. No
@@ -142,20 +142,87 @@ sanfuclaw cron remove <ID>
 
 ### Run as a background service
 
-For daily use, run the installed entry point under a process manager so the
-agent survives logout and auto-restarts on failure:
+The bundled `sanfuclaw service` command wraps **systemd** (Linux) and
+**launchd** (macOS). It renders unit files into `~/.sanfuclaw/systemd/` or
+`~/.sanfuclaw/launchd/` with the current venv's absolute path baked in, then
+optionally symlinks them into the user-level service directory and starts them.
 
 ```bash
-# macOS / Linux — quick foreground check first
-sanfuclaw start --channel all     # messaging channels (Telegram, WeChat, …)
-sanfuclaw serve                   # WebChat + REST + WebSocket gateway
+# Quick foreground smoke test first
+sanfuclaw start --channel all     # messaging channels
+sanfuclaw serve                   # WebChat + REST + WS gateway
 
-# Then wire both commands into systemd (Linux) or launchd (macOS).
+# Render + audit the unit files (prints the commands needed to activate)
+sanfuclaw service install
+
+# Or do everything — symlink, daemon-reload, enable --now
+sanfuclaw service install --enable
+
+# Day-to-day
+sanfuclaw service status
+sanfuclaw service uninstall       # stop + unlink; sources under ~/.sanfuclaw/ are kept
+
+# Linux only: keep services alive after logout (one-time)
+sudo loginctl enable-linger $USER
 ```
 
-See [docs/deployment.md](docs/deployment.md) for the full setup: venv layout,
-user-level systemd units with `loginctl enable-linger`, launchd `.plist`
-files, logging, auto-restart, and config-change restarts.
+Two units are installed side-by-side:
+
+| Unit | Command | Purpose |
+|---|---|---|
+| `sanfuclaw-agent` / `com.sanfuclaw.agent` | `sanfuclaw start --channel all` | Message channels (Telegram, WeChat, Discord) |
+| `sanfuclaw-serve` / `com.sanfuclaw.serve` | `sanfuclaw serve` | WebChat UI + REST + WebSocket |
+
+The rendered files in `~/.sanfuclaw/systemd/*.service` (or `launchd/*.plist`)
+are the source of truth — the system directory just holds symlinks. Edit
+them in place for custom flags, then reload:
+
+- **systemd** — `systemctl --user daemon-reload && systemctl --user restart sanfuclaw-agent sanfuclaw-serve`
+- **launchd** — `launchctl unload <plist> && launchctl load <plist>`
+
+#### Logs
+
+```bash
+# Linux
+journalctl --user -u sanfuclaw-agent -f        # streaming
+systemctl --user status sanfuclaw-agent        # snapshot
+
+# macOS
+tail -f ~/.sanfuclaw/agent.log
+```
+
+#### Without a service manager (nohup)
+
+For a quick, non-persistent background run:
+
+```bash
+nohup sanfuclaw start --channel all < /dev/null > ~/.sanfuclaw/agent.log 2>&1 &
+nohup sanfuclaw serve               < /dev/null > ~/.sanfuclaw/serve.log 2>&1 &
+pkill -f sanfuclaw                   # stop everything
+```
+
+Stops when the terminal / session goes away — fine for quick checks, not for
+daily use.
+
+#### Operational notes
+
+- **Config changes require a restart** — no hot reload. Use the `service`
+  command or `systemctl --user restart …` / `launchctl unload && load …`.
+- **Exposing the gateway** — `gateway.host` is `127.0.0.1` by default. Set
+  it to `0.0.0.0` to listen on all interfaces, open the firewall for
+  `gateway.port`, and front it with nginx + HTTPS rather than exposing the
+  raw port.
+- **MCP servers** are spawned and supervised by sanfuclaw itself — no
+  separate service unit needed.
+- **Backups** — everything persistent lives under `~/.sanfuclaw/` (config,
+  sessions DB, skills, WeChat credentials, rendered units). Archive that
+  one directory.
+- **WeChat on an overseas VPS** — `ilinkai.weixin.qq.com` is IP-restricted
+  and usually unreachable from outside mainland China. Run
+  `sanfuclaw weixin-login` on a local / domestic machine, then
+  `scp ~/.sanfuclaw/weixin_credentials.json vps:~/.sanfuclaw/`. If runtime
+  messaging also gets blocked, keep the WeChat channel on a reachable
+  host and run the other channels on the VPS.
 
 ## Architecture
 

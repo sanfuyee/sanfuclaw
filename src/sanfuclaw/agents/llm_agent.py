@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from typing import AsyncIterator
 
 from sanfuclaw.core.message import Envelope, Message
@@ -12,6 +13,8 @@ from sanfuclaw.core.types import MessageRole, StreamChunkType
 from .transports.base import LLMTransport, StreamChunk
 from sanfuclaw.skills.registry import SkillRegistry
 from sanfuclaw.tools.registry import ToolRegistry
+
+logger = logging.getLogger(__name__)
 
 
 class LLMAgent:
@@ -76,11 +79,18 @@ class LLMAgent:
         session.add_message(envelope.message)
         tools = self._tools.to_llm_schemas() or None
 
+        logger.info(
+            "Turn start: session=%s channel=%s history=%d msgs tools=%d",
+            session.id[:8], envelope.source_channel, len(session.history),
+            len(tools) if tools else 0,
+        )
+
         total_input_tokens = 0
         total_output_tokens = 0
         total_cached_tokens = 0
         total_reasoning_tokens = 0
         trace: list[str] = []  # collect step info for final summary
+        tool_round_count = 0   # actual rounds that issued tool calls
         max_tool_rounds = self._max_tool_rounds
         exhausted = False
 
@@ -140,15 +150,18 @@ class LLMAgent:
             ))
 
             # Execute tools
+            tool_round_count += 1
             for tc in tool_calls:
                 input_summary = self._summarize_tool_input(tc.tool_name, tc.tool_input)
                 trace.append(f"Tool `{tc.tool_name}`: {input_summary}")
+                logger.debug("Tool call: %s(%s)", tc.tool_name, input_summary)
 
                 try:
                     result = await self._tools.execute(tc.tool_name, tc.tool_input, session)
                     result_str = result if isinstance(result, str) else json.dumps(result)
                 except Exception as e:
                     result_str = f"Error: {e}"
+                    logger.exception("Tool %s raised during execute()", tc.tool_name)
 
                 session.add_message(Message(
                     role=MessageRole.TOOL,
@@ -180,6 +193,14 @@ class LLMAgent:
             f"{steps}\n"
             f"  History: {history_count} msgs | "
             f"Total: {total_input_tokens} in / {total_output_tokens} out{totals_str}"
+        )
+
+        logger.info(
+            "Turn done: session=%s tool_rounds=%d tokens=%d/%d%s%s",
+            session.id[:8], tool_round_count,
+            total_input_tokens, total_output_tokens,
+            f" cached={total_cached_tokens}" if total_cached_tokens else "",
+            " (max rounds reached)" if exhausted else "",
         )
 
     def _build_anthropic_tool_messages(self, history: list[Message]) -> list[dict]:

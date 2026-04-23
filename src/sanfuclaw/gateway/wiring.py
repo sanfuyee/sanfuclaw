@@ -7,6 +7,7 @@ drifting apart when the agent or tool wiring changes.
 
 from __future__ import annotations
 
+import logging
 import os
 from dataclasses import dataclass
 
@@ -30,6 +31,9 @@ from sanfuclaw.tools.schedule import (
 from sanfuclaw.tools.shell import ShellTool
 from sanfuclaw.tools.skill_loader import LoadSkillTool
 from sanfuclaw.tools.web_fetch import WebFetchTool
+
+
+logger = logging.getLogger(__name__)
 
 
 class MissingAPIKey(RuntimeError):
@@ -82,9 +86,14 @@ def build_transport(settings: Settings) -> LLMTransport:
 
     if settings.llm.provider == "anthropic":
         from sanfuclaw.agents.transports.anthropic import AnthropicTransport
+        logger.info("LLM transport: anthropic model=%s", settings.llm.model)
         return AnthropicTransport(api_key=api_key, default_model=settings.llm.model)
 
     from sanfuclaw.agents.transports.openai_compat import OpenAICompatTransport
+    logger.info(
+        "LLM transport: openai_compat model=%s base_url=%s",
+        settings.llm.model, settings.llm.base_url,
+    )
     return OpenAICompatTransport(
         api_key=api_key,
         base_url=settings.llm.base_url,
@@ -110,9 +119,17 @@ async def build_router(
 
     mcp_manager = MCPManager(settings.mcp.servers)
     await mcp_manager.start()
+    mcp_tool_count = 0
     for server_name, mcp_tool in mcp_manager.tools():
         mcp_session = mcp_manager.get_session(server_name)
         tool_registry.register(MCPToolAdapter(server_name, mcp_tool, mcp_session))
+        mcp_tool_count += 1
+    logger.info(
+        "Tool registry ready: %d local + %d MCP tool(s) from %d skill(s)",
+        len(tool_registry.list_names()) - mcp_tool_count,
+        mcp_tool_count,
+        len(skill_registry),
+    )
 
     transport = build_transport(settings)
     agent = LLMAgent(
