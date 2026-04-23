@@ -15,10 +15,11 @@ from sanfuclaw.core import paths
 
 class LLMConfig(BaseSettings):
     provider: str = "openai_compat"
-    model: str = "moonshotai/kimi-k2.5"
+    model: str = "zai-org/glm-5.1"
     api_key: str = ""
     base_url: str = "https://api.hpc-ai.com/inference/v1"
-    max_tokens: int = 4096
+    max_tokens: int = 200000
+    max_tool_rounds: int = 10
     temperature: float = 0.7
     system_prompt: str = (
         "You are a helpful personal AI assistant called Sanfuclaw. "
@@ -59,6 +60,7 @@ class Settings(BaseSettings):
     model_config = {"env_prefix": "SANFUCLAW_", "env_nested_delimiter": "__"}
 
     llm: LLMConfig = Field(default_factory=LLMConfig)
+    timezone: str = "Asia/Shanghai"
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     channels: dict[str, ChannelConfig] = Field(default_factory=dict)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)

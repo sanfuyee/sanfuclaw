@@ -16,6 +16,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from croniter import croniter
 
@@ -32,10 +33,24 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
-def compute_next_run(cron_expr: str, base: datetime) -> datetime:
-    """Next firing time for a cron expression, strictly after `base`."""
-    it = croniter(cron_expr, base)
-    return it.get_next(datetime)
+def compute_next_run(cron_expr: str, base: datetime, timezone_name: str = "UTC") -> datetime:
+    """Next firing time for a cron expression, returned in UTC.
+
+    Cron is interpreted in `timezone_name` (for example Asia/Shanghai), while
+    persistence and comparisons in the scheduler remain UTC.
+    """
+    try:
+        tz = ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError as e:
+        raise ValueError(f"Unknown timezone: {timezone_name!r}") from e
+
+    base_utc = base if base.tzinfo else base.replace(tzinfo=timezone.utc)
+    local_base = base_utc.astimezone(tz)
+    it = croniter(cron_expr, local_base)
+    next_local = it.get_next(datetime)
+    if next_local.tzinfo is None:
+        next_local = next_local.replace(tzinfo=tz)
+    return next_local.astimezone(timezone.utc)
 
 
 class Scheduler:
@@ -45,9 +60,10 @@ class Scheduler:
     # Lets newly-added entries get picked up without an explicit notify hook.
     POLL_INTERVAL = 60.0
 
-    def __init__(self, store: Store, router: Router):
+    def __init__(self, store: Store, router: Router, timezone_name: str = "UTC"):
         self._store = store
         self._router = router
+        self._timezone_name = timezone_name
         self._task: asyncio.Task | None = None
         self._stop_event = asyncio.Event()
 
@@ -59,7 +75,7 @@ class Scheduler:
         for s in schedules:
             if s.next_run_at is None or s.next_run_at <= now:
                 try:
-                    s.next_run_at = compute_next_run(s.cron, now)
+                    s.next_run_at = compute_next_run(s.cron, now, self._timezone_name)
                 except Exception as e:
                     logger.error(f"Schedule {s.id} has invalid cron {s.cron!r}: {e}")
                     continue
@@ -102,7 +118,7 @@ class Scheduler:
                 logger.error(f"Schedule {s.id} fire failed: {e}")
             s.last_run_at = now
             try:
-                s.next_run_at = compute_next_run(s.cron, now)
+                s.next_run_at = compute_next_run(s.cron, now, self._timezone_name)
             except Exception as e:
                 logger.error(f"Schedule {s.id} cron {s.cron!r} broken; disabling: {e}")
                 s.enabled = False

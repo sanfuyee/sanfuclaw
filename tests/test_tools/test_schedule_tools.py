@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import pytest
 
 from sanfuclaw.core.errors import ToolError
@@ -31,7 +34,7 @@ def session() -> Session:
 
 
 async def test_schedule_create_defaults_to_current_conversation(store, session):
-    tool = ScheduleCreateTool(store)
+    tool = ScheduleCreateTool(store, default_timezone="Asia/Shanghai")
 
     result = await tool.execute(
         {"cron": "0 14 * * *", "prompt": "Send tomorrow weather"},
@@ -41,7 +44,10 @@ async def test_schedule_create_defaults_to_current_conversation(store, session):
     assert result["ok"] is True
     assert result["target_channel"] == "telegram"
     assert result["target_session"] == "tg-12345"
+    assert result["timezone"] == "Asia/Shanghai"
     assert result["next_run_at"]
+    next_run = datetime.fromisoformat(result["next_run_at"])
+    assert next_run.astimezone(ZoneInfo("Asia/Shanghai")).hour == 14
 
     row = await store.get_schedule(result["id"])
     assert row is not None
@@ -50,15 +56,15 @@ async def test_schedule_create_defaults_to_current_conversation(store, session):
 
 
 async def test_schedule_create_rejects_invalid_cron(store, session):
-    tool = ScheduleCreateTool(store)
+    tool = ScheduleCreateTool(store, default_timezone="Asia/Shanghai")
     with pytest.raises(ToolError):
         await tool.execute({"cron": "not-a-cron", "prompt": "x"}, session)
 
 
 async def test_schedule_list_filter_enable_disable_and_remove(store, session):
-    create = ScheduleCreateTool(store)
+    create = ScheduleCreateTool(store, default_timezone="Asia/Shanghai")
     list_tool = ScheduleListTool(store)
-    set_enabled = ScheduleSetEnabledTool(store)
+    set_enabled = ScheduleSetEnabledTool(store, default_timezone="Asia/Shanghai")
     remove = ScheduleRemoveTool(store)
 
     a = await create.execute({"cron": "0 9 * * *", "prompt": "a"}, session)

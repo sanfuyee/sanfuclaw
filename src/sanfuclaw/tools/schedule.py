@@ -49,12 +49,17 @@ class ScheduleCreateTool:
                 "type": "boolean",
                 "description": "Whether the schedule starts enabled (default: true).",
             },
+            "timezone": {
+                "type": "string",
+                "description": "IANA timezone for cron interpretation, e.g. 'Asia/Shanghai'.",
+            },
         },
         "required": ["cron", "prompt"],
     }
 
-    def __init__(self, store: Store):
+    def __init__(self, store: Store, default_timezone: str = "UTC"):
         self._store = store
+        self._default_timezone = default_timezone
 
     async def execute(self, params: dict[str, Any], session: Session) -> dict[str, Any]:
         cron_expr = str(params.get("cron", "")).strip()
@@ -77,6 +82,7 @@ class ScheduleCreateTool:
             target_session = str(target_session_raw).strip()
 
         enabled = bool(params.get("enabled", True))
+        timezone_name = str(params.get("timezone") or self._default_timezone).strip()
         schedule = Schedule(
             cron=cron_expr,
             prompt=prompt,
@@ -84,7 +90,7 @@ class ScheduleCreateTool:
             target_session=target_session,
             enabled=enabled,
         )
-        schedule.next_run_at = compute_next_run(cron_expr, _now())
+        schedule.next_run_at = compute_next_run(cron_expr, _now(), timezone_name)
         await self._store.add_schedule(schedule)
 
         return {
@@ -95,6 +101,7 @@ class ScheduleCreateTool:
             "target_channel": schedule.target_channel,
             "target_session": schedule.target_session,
             "enabled": schedule.enabled,
+            "timezone": timezone_name,
             "next_run_at": schedule.next_run_at.isoformat() if schedule.next_run_at else "",
         }
 
@@ -172,18 +179,24 @@ class ScheduleSetEnabledTool:
                 "type": "boolean",
                 "description": "True to enable, false to disable.",
             },
+            "timezone": {
+                "type": "string",
+                "description": "IANA timezone for cron interpretation when enabling.",
+            },
         },
         "required": ["id", "enabled"],
     }
 
-    def __init__(self, store: Store):
+    def __init__(self, store: Store, default_timezone: str = "UTC"):
         self._store = store
+        self._default_timezone = default_timezone
 
     async def execute(self, params: dict[str, Any], session: Session) -> dict[str, Any]:
         schedule_id = str(params.get("id", "")).strip()
         if not schedule_id:
             raise ToolError("Missing required field: id")
         enabled = bool(params["enabled"])
+        timezone_name = str(params.get("timezone") or self._default_timezone).strip()
 
         schedule = await self._store.get_schedule(schedule_id)
         if not schedule:
@@ -191,13 +204,14 @@ class ScheduleSetEnabledTool:
 
         schedule.enabled = enabled
         if enabled:
-            schedule.next_run_at = compute_next_run(schedule.cron, _now())
+            schedule.next_run_at = compute_next_run(schedule.cron, _now(), timezone_name)
         await self._store.update_schedule(schedule)
 
         return {
             "ok": True,
             "id": schedule.id,
             "enabled": schedule.enabled,
+            "timezone": timezone_name,
             "next_run_at": schedule.next_run_at.isoformat() if schedule.next_run_at else "",
         }
 
