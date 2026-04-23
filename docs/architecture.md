@@ -314,6 +314,8 @@ message into `<target_channel>`". The `Scheduler`:
    has passed, fire them, recompute `next_run_at` via `croniter`, and
    sleep until the next earliest run (capped at 60s so newly-added
    entries get picked up without an explicit notify hook).
+   Cron expressions are interpreted in the configured `Settings.timezone`
+   (default `Asia/Shanghai`), while persisted `next_run_at` remains UTC.
 3. To "fire", it synthesizes an `Envelope` with `source_channel =
    target_channel` and routes it through the same `Router` everyone
    else uses. The reply streams back to the target channel naturally —

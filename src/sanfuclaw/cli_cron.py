@@ -10,6 +10,7 @@ from croniter import croniter
 from rich.console import Console
 from rich.table import Table
 
+from sanfuclaw.core.config import Settings
 from sanfuclaw.core.schedule import Schedule
 from sanfuclaw.gateway.scheduler import compute_next_run
 from sanfuclaw.storage.sqlite import SQLiteStore
@@ -35,12 +36,22 @@ def _fmt_dt(dt) -> str:
     return dt.isoformat(sep=" ", timespec="seconds") if dt else "-"
 
 
+def _default_timezone() -> str:
+    return Settings.load(None).timezone
+
+
 @cron_app.command("add")
 def add(
     expr: str = typer.Argument(..., help="Cron expression, e.g. '0 8 * * *'"),
     channel: str = typer.Option(..., "--channel", "-c", help="Target channel (cli/telegram/weixin/webchat)"),
     prompt: str = typer.Option(..., "--prompt", "-p", help="Prompt text to send when triggered"),
     session: str = typer.Option("", "--session", "-s", help="Target session id (empty = SessionManager resolves by channel+sender)"),
+    timezone_name: str = typer.Option(
+        None,
+        "--timezone",
+        "-z",
+        help="IANA timezone for cron interpretation (default from settings.timezone).",
+    ),
 ):
     """Add a new scheduled task."""
     if not croniter.is_valid(expr):
@@ -54,7 +65,8 @@ def add(
         target_session=session,
     )
     from datetime import datetime, timezone
-    schedule.next_run_at = compute_next_run(expr, datetime.now(timezone.utc))
+    tz_name = timezone_name or _default_timezone()
+    schedule.next_run_at = compute_next_run(expr, datetime.now(timezone.utc), tz_name)
 
     async def _go(store):
         await store.add_schedule(schedule)
@@ -135,6 +147,8 @@ def disable(schedule_id: str = typer.Argument(..., help="Schedule ID")):
 
 
 def _set_enabled(schedule_id: str, enabled: bool) -> None:
+    tz_name = _default_timezone()
+
     async def _go(store):
         s = await store.get_schedule(schedule_id)
         if not s:
@@ -144,7 +158,7 @@ def _set_enabled(schedule_id: str, enabled: bool) -> None:
         s.enabled = enabled
         if enabled:
             from datetime import datetime, timezone
-            s.next_run_at = compute_next_run(s.cron, datetime.now(timezone.utc))
+            s.next_run_at = compute_next_run(s.cron, datetime.now(timezone.utc), tz_name)
         await store.update_schedule(s)
         return s
 

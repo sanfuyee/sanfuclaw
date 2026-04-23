@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -43,6 +44,14 @@ def test_compute_next_run_is_strictly_after_base():
     assert compute_next_run("*/5 * * * *", on_boundary) == datetime(
         2026, 1, 1, 12, 10, 0, tzinfo=timezone.utc
     )
+
+
+def test_compute_next_run_respects_timezone():
+    base = datetime(2026, 1, 1, 5, 0, 0, tzinfo=timezone.utc)  # 13:00 in Shanghai
+    nxt = compute_next_run("0 14 * * *", base, "Asia/Shanghai")
+    # 14:00 Shanghai should be 06:00 UTC on the same day.
+    assert nxt == datetime(2026, 1, 1, 6, 0, 0, tzinfo=timezone.utc)
+    assert nxt.astimezone(ZoneInfo("Asia/Shanghai")).hour == 14
 
 
 async def test_scheduler_fires_due_entry(store):

@@ -2,12 +2,15 @@
 # Copy this file to sanfuclaw.toml and fill in your values.
 # API keys can also be set via environment variables (LLM_API_KEY, TELEGRAM_BOT_TOKEN)
 
+timezone = "Asia/Shanghai"          # cron scheduling timezone
+
 [llm]
 provider = "openai_compat"          # or "anthropic"
-model = "minimax/minimax-m2.5"
+model = "zai-org/glm-5.1"
 base_url = "https://api.hpc-ai.com/inference/v1"
 api_key = ""                        # Your LLM API key
-max_tokens = 4096
+max_tokens = 200000
+max_tool_rounds = 10
 temperature = 0.7
 system_prompt = "You are a helpful personal AI assistant called Sanfuclaw. You are running locally on the user's machine. Be concise and helpful."
 

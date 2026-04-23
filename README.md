@@ -100,6 +100,9 @@ python -m sanfuclaw cron remove <ID>
 
 # Or ask in chat directly (agent uses schedule tools):
 # "每天下午2点给我发明天的天气"
+
+# Cron is interpreted in your configured timezone (default: Asia/Shanghai)
+# Set top-level `timezone` in ~/.sanfuclaw/config.json or sanfuclaw.toml
 ```
 
 ## Architecture

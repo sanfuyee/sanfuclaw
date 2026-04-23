@@ -26,6 +26,7 @@ class LLMAgent:
         system_prompt: str = "You are a helpful personal AI assistant called Sanfuclaw.",
         model: str | None = None,
         max_tokens: int = 4096,
+        max_tool_rounds: int = 10,
         temperature: float = 0.7,
         max_history: int = 20,
     ):
@@ -38,6 +39,7 @@ class LLMAgent:
         self._system_prompt = system_prompt
         self._model = model
         self._max_tokens = max_tokens
+        self._max_tool_rounds = max_tool_rounds
         self._temperature = temperature
         self._max_history = max_history
         # Per-turn diagnostic info (LLM steps, token usage). Populated each
@@ -79,7 +81,7 @@ class LLMAgent:
         total_cached_tokens = 0
         total_reasoning_tokens = 0
         trace: list[str] = []  # collect step info for final summary
-        max_tool_rounds = 5
+        max_tool_rounds = self._max_tool_rounds
         exhausted = False
 
         for round_num in range(max_tool_rounds + 1):

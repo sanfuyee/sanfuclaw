@@ -40,6 +40,7 @@ SCHEDULE_PROMPT_GUIDANCE = """
 Scheduling behavior:
 - If a user asks to create/update/delete/list reminders or recurring tasks, use schedule tools.
 - Interpret natural language times and convert them to cron for `schedule_create`.
+- Interpret times in the configured default timezone unless the user explicitly provides one.
 - Default schedule target to the current conversation unless the user asks for a different channel/session.
 - After mutations, report the schedule id and next run time.
 """.strip()
@@ -100,9 +101,9 @@ async def build_router(
     tool_registry = ToolRegistry()
     tool_registry.register(ShellTool())
     tool_registry.register(WebFetchTool())
-    tool_registry.register(ScheduleCreateTool(store))
+    tool_registry.register(ScheduleCreateTool(store, default_timezone=settings.timezone))
     tool_registry.register(ScheduleListTool(store))
-    tool_registry.register(ScheduleSetEnabledTool(store))
+    tool_registry.register(ScheduleSetEnabledTool(store, default_timezone=settings.timezone))
     tool_registry.register(ScheduleRemoveTool(store))
     if len(skill_registry) > 0:
         tool_registry.register(LoadSkillTool(skill_registry))
@@ -122,13 +123,14 @@ async def build_router(
         system_prompt=f"{settings.llm.system_prompt}\n\n{SCHEDULE_PROMPT_GUIDANCE}",
         model=settings.llm.model,
         max_tokens=settings.llm.max_tokens,
+        max_tool_rounds=settings.llm.max_tool_rounds,
         temperature=settings.llm.temperature,
     )
 
     router = Router(session_manager=session_manager)
     router.register_agent(agent, default=True)
 
-    scheduler = Scheduler(store=store, router=router)
+    scheduler = Scheduler(store=store, router=router, timezone_name=settings.timezone)
 
     return Wiring(
         router=router,
