@@ -28,7 +28,7 @@ class LLMConfig(BaseSettings):
 
 class GatewayConfig(BaseSettings):
     host: str = "127.0.0.1"
-    port: int = 18789
+    port: int = 30423
 
 
 class ChannelConfig(BaseSettings):
