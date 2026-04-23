@@ -97,6 +97,9 @@ python -m sanfuclaw cron add "0 8 * * *" --channel telegram --prompt "今日天�
 python -m sanfuclaw cron list
 python -m sanfuclaw cron disable <ID>     # pause without deleting
 python -m sanfuclaw cron remove <ID>
+
+# Or ask in chat directly (agent uses schedule tools):
+# "每天下午2点给我发明天的天气"
 ```
 
 ## Architecture

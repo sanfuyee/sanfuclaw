@@ -21,6 +21,12 @@ from sanfuclaw.mcp_client.tool_adapter import MCPToolAdapter
 from sanfuclaw.skills.registry import SkillRegistry
 from sanfuclaw.storage.base import Store
 from sanfuclaw.tools.registry import ToolRegistry
+from sanfuclaw.tools.schedule import (
+    ScheduleCreateTool,
+    ScheduleListTool,
+    ScheduleRemoveTool,
+    ScheduleSetEnabledTool,
+)
 from sanfuclaw.tools.shell import ShellTool
 from sanfuclaw.tools.skill_loader import LoadSkillTool
 from sanfuclaw.tools.web_fetch import WebFetchTool
@@ -28,6 +34,15 @@ from sanfuclaw.tools.web_fetch import WebFetchTool
 
 class MissingAPIKey(RuntimeError):
     """Raised when no LLM API key is configured."""
+
+
+SCHEDULE_PROMPT_GUIDANCE = """
+Scheduling behavior:
+- If a user asks to create/update/delete/list reminders or recurring tasks, use schedule tools.
+- Interpret natural language times and convert them to cron for `schedule_create`.
+- Default schedule target to the current conversation unless the user asks for a different channel/session.
+- After mutations, report the schedule id and next run time.
+""".strip()
 
 
 @dataclass
@@ -85,6 +100,10 @@ async def build_router(
     tool_registry = ToolRegistry()
     tool_registry.register(ShellTool())
     tool_registry.register(WebFetchTool())
+    tool_registry.register(ScheduleCreateTool(store))
+    tool_registry.register(ScheduleListTool(store))
+    tool_registry.register(ScheduleSetEnabledTool(store))
+    tool_registry.register(ScheduleRemoveTool(store))
     if len(skill_registry) > 0:
         tool_registry.register(LoadSkillTool(skill_registry))
 
@@ -100,7 +119,7 @@ async def build_router(
         transport=transport,
         tool_registry=tool_registry,
         skill_registry=skill_registry,
-        system_prompt=settings.llm.system_prompt,
+        system_prompt=f"{settings.llm.system_prompt}\n\n{SCHEDULE_PROMPT_GUIDANCE}",
         model=settings.llm.model,
         max_tokens=settings.llm.max_tokens,
         temperature=settings.llm.temperature,
