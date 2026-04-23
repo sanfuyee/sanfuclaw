@@ -19,14 +19,11 @@ A local-first personal AI agent inspired by [OpenClaw](https://github.com/opencl
 ### Install
 
 ```bash
-pip install -e .
-
-# Optional channel/tool extras (combine in one command if you like):
-pip install -e ".[telegram]"   # Telegram channel
-pip install -e ".[weixin]"     # WeChat channel
-pip install -e ".[mcp]"        # MCP servers
-pip install -e ".[telegram,mcp]"
+pip install -e .                          # core only
+pip install -e ".[telegram,weixin,mcp]"   # with optional channels + MCP
 ```
+
+Extras are `telegram`, `weixin`, `mcp` — pick any combination.
 
 The first time you run any `sanfuclaw` command it auto-creates
 `~/.sanfuclaw/config.json` (template) and `~/.sanfuclaw/skills/`. No
