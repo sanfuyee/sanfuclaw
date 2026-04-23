@@ -29,9 +29,11 @@ class LLMAgent:
         system_prompt: str = "You are a helpful personal AI assistant called Sanfuclaw.",
         model: str | None = None,
         max_tokens: int = 4096,
+        context_window: int | None = None,
         max_tool_rounds: int = 10,
         temperature: float = 0.7,
         max_history: int = 20,
+        input_safety_margin: int = 1000,
     ):
         self.name = name
         self._transport = transport
@@ -42,9 +44,11 @@ class LLMAgent:
         self._system_prompt = system_prompt
         self._model = model
         self._max_tokens = max_tokens
+        self._context_window = context_window
         self._max_tool_rounds = max_tool_rounds
         self._temperature = temperature
         self._max_history = max_history
+        self._input_safety_margin = input_safety_margin
         # Per-turn diagnostic info (LLM steps, token usage). Populated each
         # process() call. The router decides whether to surface this — only
         # interactive channels (CLI) want it; user-facing channels skip it.
@@ -53,12 +57,75 @@ class LLMAgent:
     def _build_messages(self, session: Session) -> list[dict]:
         """Build messages in the correct format for the current transport."""
         recent = session.history[-self._max_history:]
+        recent = self._fit_history_to_budget(recent)
 
         fmt = getattr(self._transport, "message_format", "anthropic")
         if fmt == "openai":
             return self._build_openai_tool_messages(recent)
         else:
             return self._build_anthropic_tool_messages(recent)
+
+    @staticmethod
+    def _estimate_tokens(text: str) -> int:
+        # 3 chars/token: overestimates pure English (~4 chars/tok), about
+        # right for mixed CJK (~1.5 chars/tok). Overestimating is safe —
+        # it just trims slightly more aggressively.
+        return max(1, len(text) // 3)
+
+    def _estimate_message_tokens(self, msg: Message) -> int:
+        total = self._estimate_tokens(msg.content or "")
+        if "tool_calls" in msg.metadata:
+            total += self._estimate_tokens(json.dumps(msg.metadata["tool_calls"]))
+        return total + 4  # small per-message structural overhead
+
+    def _fit_history_to_budget(self, history: list[Message]) -> list[Message]:
+        """Drop oldest messages until estimated tokens fit the input budget.
+
+        Preserves tool_use/tool_result pairs: an orphaned tool_result is
+        rejected by both Anthropic and OpenAI, so if an assistant message
+        with tool_calls is dropped, its trailing TOOL messages go too.
+        """
+        if not self._context_window:
+            return history
+
+        fixed = self._estimate_tokens(self._system_prompt)
+        try:
+            schemas = self._tools.to_llm_schemas() or []
+            if schemas:
+                fixed += self._estimate_tokens(json.dumps(schemas))
+        except Exception:
+            logger.debug("Could not estimate tool schema tokens", exc_info=True)
+        fixed += self._max_tokens + self._input_safety_margin
+
+        budget = self._context_window - fixed
+        if budget <= 0:
+            logger.warning(
+                "Input budget exhausted by fixed overhead "
+                "(context_window=%d, max_tokens=%d, margin=%d). Sending empty history.",
+                self._context_window, self._max_tokens, self._input_safety_margin,
+            )
+            return []
+
+        sizes = [self._estimate_message_tokens(m) for m in history]
+        total = sum(sizes)
+        if total <= budget:
+            return history
+
+        i = 0
+        n = len(history)
+        while total > budget and i < n:
+            total -= sizes[i]
+            i += 1
+            # A leading TOOL message would be an orphaned tool_result — drop it.
+            while i < n and history[i].role == MessageRole.TOOL:
+                total -= sizes[i]
+                i += 1
+
+        logger.info(
+            "Trimmed %d/%d history messages to fit input budget (%d tokens est.)",
+            i, n, budget,
+        )
+        return history[i:]
 
     async def _stream_llm(
         self, messages: list[dict], tools: list[dict] | None,

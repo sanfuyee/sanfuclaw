@@ -18,7 +18,8 @@ class LLMConfig(BaseSettings):
     model: str = "zai-org/glm-5.1"
     api_key: str = ""
     base_url: str = "https://api.hpc-ai.com/inference/v1"
-    max_tokens: int = 200000
+    max_tokens: int = 8192
+    context_window: int = 200000
     max_tool_rounds: int = 10
     temperature: float = 0.7
     system_prompt: str = (
