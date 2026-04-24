@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import sys
 
 import typer
 from rich.console import Console
@@ -94,15 +95,32 @@ def _default_config_text() -> str:
 def _ensure_home_initialized() -> None:
     """First-run auto-init: create ~/.sanfuclaw/config.json + skills/ if missing.
 
-    Runs before every CLI invocation so `pip install` + any `sanfuclaw` command
-    produces a ready-to-edit config with no extra setup step.
+    If stdin is a TTY, offer the interactive `sanfuclaw setup` wizard on
+    first run. In non-interactive contexts (systemd, Docker `-d`, CI)
+    fall back to writing the commented template so the process can keep
+    starting without human input.
     """
     from sanfuclaw.core import paths
 
     cfg = paths.config_file()
     if not cfg.exists():
-        cfg.write_text(_default_config_text())
-        console.print(f"[dim]First run — created {cfg}[/dim]")
+        if sys.stdin.isatty():
+            console.print(
+                f"[dim]First run — no config at {cfg}.[/dim]"
+            )
+            if typer.confirm("Run the interactive setup wizard now?", default=True):
+                from sanfuclaw.cli_setup import run_wizard
+                run_wizard()
+                return
+            cfg.write_text(_default_config_text())
+            console.print(f"[dim]Created template at {cfg} — edit it, then re-run.[/dim]")
+        else:
+            cfg.write_text(_default_config_text())
+            logger.warning(
+                "First run (no TTY): wrote default template to %s. "
+                "Run `sanfuclaw setup` in a terminal to fill in LLM credentials.",
+                cfg,
+            )
     paths.skills_dir()
 
 
@@ -430,6 +448,13 @@ async def _weixin_login(base_url: str):
     except Exception as e:
         console.print(f"[red]Login failed:[/red] {e}")
         raise typer.Exit(1)
+
+
+@app.command()
+def setup():
+    """Run the interactive first-run wizard — picks LLM, API key, channels, MCP."""
+    from sanfuclaw.cli_setup import run_wizard
+    run_wizard()
 
 
 @app.command()

@@ -15,9 +15,49 @@ A local-first personal AI agent inspired by [OpenClaw](https://github.com/opencl
 - **Event hooks**: Pluggable event system for custom integrations
 - **Streaming-first**: Real-time response streaming across all channels
 
-## Quick Start
+## Install
 
-### Install
+### For non-programmers (recommended)
+
+No Python, no pip, no venv — one download and one command.
+
+1. Go to the [Releases page](https://github.com/sanfuyee/sanfuclaw/releases)
+   and download the binary for your platform:
+   - macOS (Apple Silicon — M1/M2/M3/M4): `sanfuclaw-macos-arm64`
+   - macOS (Intel): `sanfuclaw-macos-x86_64`
+   - Linux (x86_64): `sanfuclaw-linux-x86_64`
+   - Windows: `sanfuclaw-windows-x86_64.exe`
+2. Make it runnable and move it somewhere on `PATH`:
+   ```bash
+   # macOS / Linux
+   chmod +x ~/Downloads/sanfuclaw-*
+   sudo mv ~/Downloads/sanfuclaw-* /usr/local/bin/sanfuclaw
+   ```
+   On Windows, rename to `sanfuclaw.exe` and put it in a folder that's on
+   `PATH` (or just run it from the download folder).
+3. Run the setup wizard — it asks plain questions and writes the config
+   for you:
+   ```bash
+   sanfuclaw setup
+   ```
+4. Start chatting:
+   ```bash
+   sanfuclaw start
+   ```
+
+The wizard handles LLM provider selection (HPC-AI, Moonshot, DeepSeek,
+OpenAI, Anthropic, or local Ollama), API key, messaging channels, optional
+MCP tools, and background autostart. Re-run it anytime to change settings —
+your existing config is backed up automatically.
+
+#### macOS first-run warning
+
+The binary is not yet code-signed. On first launch macOS will block it
+with *"cannot be opened because the developer cannot be verified."*
+Right-click the binary → **Open** → **Open** in the confirmation dialog.
+You only need to do this once.
+
+### For developers
 
 Requires Python ≥ 3.12. Recommended: install into an isolated venv so it
 doesn't pollute the system Python.
@@ -37,8 +77,8 @@ python -m pip install --upgrade pip
 # 4. Install (editable — source edits take effect immediately)
 pip install -e .
 
-# 5. Verify
-sanfuclaw --help
+# 5. Run the setup wizard (same as the binary flow)
+sanfuclaw setup
 ```
 
 All channel and MCP dependencies are bundled. The runtime only starts what you
@@ -51,14 +91,24 @@ beyond install size.
 > install` bakes the venv's absolute path into the unit file (see
 > [Run as a background service](#run-as-a-background-service)).
 
-The first time you run any `sanfuclaw` command it auto-creates
-`~/.sanfuclaw/config.json` (template) and `~/.sanfuclaw/skills/`. No
-extra setup step is required — just run `sanfuclaw --help` once, then
-edit the config.
+The first time you run `sanfuclaw` in a terminal it prompts to launch the
+interactive setup wizard. If stdin isn't a TTY (systemd, Docker `-d`, CI)
+it falls back to writing a commented template to `~/.sanfuclaw/config.json`
+and logs a reminder to run `sanfuclaw setup` in an interactive shell.
 
-### Configure
+## Configure
 
-Edit `~/.sanfuclaw/config.json`:
+Easiest path — run the wizard:
+
+```bash
+sanfuclaw setup
+```
+
+It asks plain questions (provider, API key, channels, MCP, autostart) and
+writes the config for you. Running it again backs up the existing file to
+`config.json.bak.<timestamp>` before overwriting.
+
+For manual edits, open `~/.sanfuclaw/config.json`:
 
 ```json
 {
@@ -77,7 +127,7 @@ Edit `~/.sanfuclaw/config.json`:
 Or set secrets via environment variables:
 
 ```bash
-export LLM_API_KEY="your-key"
+export SANFUCLAW_LLM__API_KEY="your-key"
 export TELEGRAM_BOT_TOKEN="your-bot-token"
 ```
 
@@ -85,18 +135,25 @@ Config resolution order: `--config <path>` → `$SANFUCLAW_CONFIG` →
 `~/.sanfuclaw/config.json` → `./sanfuclaw.toml` (legacy). Override the home
 directory itself with `$SANFUCLAW_HOME`.
 
-### Uninstall
+## Uninstall
+
+Binary install: delete the binary (`rm /usr/local/bin/sanfuclaw` or wherever
+you put it).
+
+Pip install:
 
 ```bash
-pip uninstall sanfuclaw    # remove the package
-rm -rf ~/.sanfuclaw/       # optional: drop user data (config, sessions, credentials)
+pip uninstall sanfuclaw
 ```
 
-`pip uninstall` removes only the Python package — Python packaging has no
-post-uninstall hook, so user data in `~/.sanfuclaw/` stays put unless you
-remove it yourself.
+Either way, user data under `~/.sanfuclaw/` (config, sessions, credentials,
+skills, memory) is kept. Remove it explicitly if you don't want it:
 
-### Run
+```bash
+rm -rf ~/.sanfuclaw/
+```
+
+## Run
 
 There are two equivalent entry points — pick whichever fits the situation:
 
