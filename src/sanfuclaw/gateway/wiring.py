@@ -50,6 +50,19 @@ Scheduling behavior:
 """.strip()
 
 
+TOOL_EFFICIENCY_GUIDANCE = """
+Tool-use efficiency:
+- Each tool round costs a full LLM turn. Minimize rounds by batching.
+- When exploring files, combine reads into ONE `shell` call:
+  `cat f1 f2 f3` or `for f in a b c; do echo "=== $f ==="; cat "$f"; done`.
+- Chain related shell steps with `&&` or `;` in a single command instead of
+  issuing them over several rounds.
+- When independent operations are needed, emit MULTIPLE tool calls in the
+  SAME round (parallel) rather than one per round (serial).
+- Prefer `find ... -exec cat {} +` or `head -n N f1 f2 f3` over many small reads.
+""".strip()
+
+
 @dataclass
 class Wiring:
     router: Router
@@ -137,7 +150,11 @@ async def build_router(
         transport=transport,
         tool_registry=tool_registry,
         skill_registry=skill_registry,
-        system_prompt=f"{settings.llm.system_prompt}\n\n{SCHEDULE_PROMPT_GUIDANCE}",
+        system_prompt=(
+            f"{settings.llm.system_prompt}\n\n"
+            f"{SCHEDULE_PROMPT_GUIDANCE}\n\n"
+            f"{TOOL_EFFICIENCY_GUIDANCE}"
+        ),
         model=settings.llm.model,
         max_tokens=settings.llm.max_tokens,
         context_window=settings.llm.context_window,

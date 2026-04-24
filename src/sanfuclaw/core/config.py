@@ -20,7 +20,7 @@ class LLMConfig(BaseSettings):
     base_url: str = "https://api.hpc-ai.com/inference/v1"
     max_tokens: int = 8192
     context_window: int = 200000
-    max_tool_rounds: int = 10
+    max_tool_rounds: int = 20
     temperature: float = 0.7
     system_prompt: str = (
         "You are a helpful personal AI assistant called Sanfuclaw. "

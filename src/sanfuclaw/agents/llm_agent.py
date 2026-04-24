@@ -32,7 +32,6 @@ class LLMAgent:
         context_window: int | None = None,
         max_tool_rounds: int = 10,
         temperature: float = 0.7,
-        max_history: int = 20,
         input_safety_margin: int = 1000,
     ):
         self.name = name
@@ -47,7 +46,6 @@ class LLMAgent:
         self._context_window = context_window
         self._max_tool_rounds = max_tool_rounds
         self._temperature = temperature
-        self._max_history = max_history
         self._input_safety_margin = input_safety_margin
         # Per-turn diagnostic info (LLM steps, token usage). Populated each
         # process() call. The router decides whether to surface this — only
@@ -56,8 +54,7 @@ class LLMAgent:
 
     def _build_messages(self, session: Session) -> list[dict]:
         """Build messages in the correct format for the current transport."""
-        recent = session.history[-self._max_history:]
-        recent = self._fit_history_to_budget(recent)
+        recent = self._fit_history_to_budget(session.history)
 
         fmt = getattr(self._transport, "message_format", "anthropic")
         if fmt == "openai":
