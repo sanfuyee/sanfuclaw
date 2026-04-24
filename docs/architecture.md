@@ -49,7 +49,9 @@ The architecture optimizes for three things, in order:
                   │(Anthro/  │  │             │
                   │ OpenAI)  │  │ shell       │
                   └──────────┘  │ web_fetch   │
-                                │ load_skill ─┼─→ SkillRegistry (*.md)
+                                │ load_skill ─┼─→ SkillRegistry   (*.md)
+                                │ load_memory─┼─→ MemoryRegistry  (*.md + MEMORY.md)
+                                │ schedule_* ─┼─→ Store (schedules table)
                                 │ mcp_* ──────┼─→ MCPManager → stdio/SSE
                                 └─────────────┘
                                       │
@@ -58,10 +60,10 @@ The architecture optimizes for three things, in order:
                                └─────────────┘
 ```
 
-Channels, tools, skills, and MCP servers all plug into a single
+Channels, tools, skills, memory, and MCP servers all plug into a single
 `ToolRegistry` so the LLM sees one unified surface. There is no separate
-"skill runtime" or "MCP runtime" — `load_skill` is a normal tool, and MCP
-tools are normal tools behind a thin adapter.
+"skill runtime" or "memory runtime" or "MCP runtime" — `load_skill`,
+`load_memory`, and MCP tools are all normal tools behind thin adapters.
 
 ### Tech stack
 
@@ -79,10 +81,11 @@ tools are normal tools behind a thin adapter.
 | MCP | `mcp` (optional) | Official Model Context Protocol SDK |
 | Testing | `pytest` + `pytest-asyncio` | Standard |
 
-Intentionally *not* in the stack: no ORM (there are 3 tables; raw SQL is
-clearer), no scheduler (there is no recurring work), no dependency
-injection framework (wiring happens explicitly in `gateway/wiring.py`,
-shared by both the CLI and gateway entry points).
+Intentionally *not* in the stack: no ORM (raw SQL over a handful of
+tables is clearer), no general scheduling framework (the built-in cron
+runner uses `croniter` directly without APScheduler et al.), no
+dependency injection framework (wiring happens explicitly in
+`gateway/wiring.py`, shared by both the CLI and gateway entry points).
 
 ## Core abstractions
 
@@ -293,6 +296,48 @@ the LLM to call `shell` with `git log`; the `weather-report` skill tells
 it to use `web_fetch` on `wttr.in`. No skill runtime, no helper scripts,
 no imports — they're just instructions.
 
+### Memory (`src/sanfuclaw/memory/`)
+
+Memory is "skills that persist context across sessions, not just
+capabilities." Structurally it mirrors the skills subsystem — a
+directory of markdown files, an always-loaded index, and a
+load-on-demand tool — but the semantics are notes about the user,
+feedback, ongoing projects, or external references rather than
+reusable task instructions.
+
+Layout under `settings.memory.dir` (default `~/.sanfuclaw/memory/`):
+
+```
+memory/
+├── MEMORY.md          ← hand-curated index, injected into every turn
+├── user_role.md       ← individual entry, loaded on demand
+├── feedback_*.md
+├── project_*.md
+└── reference_*.md
+```
+
+On startup, `MemoryRegistry(settings.memory.dir)` builds:
+
+- a **system-prompt block** — `MEMORY.md` verbatim if present
+  (truncated at 200 lines as a safety net); otherwise an
+  auto-generated `name: description` list from frontmatter;
+- a built-in **`load_memory` tool** that takes an entry name and
+  returns the full body.
+
+The tool is only registered when the memory directory has content, so
+an empty memory/ dir doesn't add surface area the LLM has no use for.
+
+This is the read path. A future write path — `save_memory` /
+`update_memory` / `forget_memory` tools — will let the LLM curate the
+index during a conversation; MEMORY.md is then a live artifact the LLM
+maintains rather than a purely hand-edited file. Write-side design
+still pending (concurrency, `forget` safety, typed entries).
+
+The pattern is lifted from Claude Code's auto-memory. Deliberate
+departures: sanfuclaw's Step 1 keeps frontmatter optional (zero-setup
+note-taking) and fully trusts the user-written `MEMORY.md` instead of
+re-rendering it from entry metadata.
+
 ### MCP (`src/sanfuclaw/mcp_client/`)
 
 Configured under `mcp.servers.<name>` in `~/.sanfuclaw/config.json`.
@@ -447,6 +492,16 @@ any other platform.
     `find ... -exec cat {} +`). Before this, Kimi-K2.5 would serialize
     one `cat` per round and exhaust `max_tool_rounds` on trivial
     codebase surveys.
+16. **Memory reuses the skill pattern, not a new subsystem.** Both are
+    "directory of markdown + always-loaded index + load-on-demand
+    tool"; they differ only in what the markdown contains (reusable
+    task instructions vs. persistent notes about the user/project).
+    Sharing `_parse_frontmatter` keeps the two loaders truly parallel,
+    and the agent's tool loop doesn't need to know the difference.
+    `MEMORY.md` is injected verbatim rather than re-rendered, so the
+    user (or a future `save_memory` tool) fully controls the index
+    format — with a 200-line truncation guard so a runaway file can't
+    silently balloon every turn's system prompt.
 
 ## Current state
 
@@ -456,10 +511,12 @@ All core components are implemented:
   WebChat (browser via WebSocket).
 - ✅ **Transports**: Anthropic, OpenAI-compatible (with retry and
   usage-chunk deduplication).
-- ✅ **Tools**: shell, web_fetch, load_skill, plus any MCP tool.
+- ✅ **Tools**: shell, web_fetch, load_skill, load_memory, plus any MCP tool.
 - ✅ **Skills**: markdown-based, lazy-loaded, ships with 5 example
   skills (`weather-report`, `code-review`, `commit-message`,
   `explain-error`, `release-notes`).
+- 🟡 **Memory**: read path — `MEMORY.md` index + `load_memory` tool.
+  Write tools (`save_memory` / `update_memory` / `forget_memory`) pending.
 - ✅ **MCP**: stdio + SSE, auto-discovery, registered into the unified
   tool registry.
 - ✅ **Storage**: SQLite with session manager and history.
