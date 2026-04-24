@@ -21,7 +21,7 @@
     "max_tokens": 8192,
     // context_window: model's total context (input + output)
     "context_window": 200000,
-    "max_tool_rounds": 10,
+    "max_tool_rounds": 20,
     "temperature": 0.7,
     "system_prompt": "You are a helpful personal AI assistant called Sanfuclaw. You are running locally on the user's machine. Be concise and helpful."
   },

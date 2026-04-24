@@ -13,7 +13,15 @@ class ShellTool:
     """Execute shell commands."""
 
     name = "shell"
-    description = "Execute a shell command and return the output. Use for system operations, file management, and running scripts."
+    description = (
+        "Execute a shell command and return its output. Use for system operations, "
+        "file management, and running scripts. "
+        "To minimize round-trips, prefer combining steps in a single call: "
+        "chain with `&&` or `;`, read multiple files with `cat f1 f2 f3`, "
+        "or use `find ... -exec cat {} +`. Issue one command per call; when "
+        "several INDEPENDENT commands are needed, emit multiple tool calls "
+        "in the same turn rather than across successive turns."
+    )
     parameters_schema = {
         "type": "object",
         "properties": {
