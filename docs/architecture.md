@@ -151,10 +151,13 @@ implementation and they're pure registry/dispatch code:
    from SQLite on first hit, cached in memory afterward.
 3. **Router picks an agent** (`envelope.target_agent` or the default)
    and calls `agent.process(envelope, session)`.
-4. **Agent slices history** to the `max_history` (default 20) most
-   recent messages for the prompt — without mutating `session.history`,
-   so the persisted record stays complete. Long sessions never inflate
-   token cost unboundedly.
+4. **Agent trims history to fit the token budget** — without mutating
+   `session.history`, so the persisted record stays complete. The
+   budget is `context_window − (system_prompt + tool_schemas +
+   max_tokens_output + input_safety_margin)`; oldest messages get
+   dropped until the total fits, with pair-awareness so an orphaned
+   `tool_result` never leads the list (both Anthropic and OpenAI
+   reject that). Long sessions never inflate token cost.
 5. **Agent builds provider-specific messages.** Anthropic format nests
    tool calls inside an assistant `content` array; OpenAI format uses a
    separate `tool_calls` field. `_build_anthropic_tool_messages` /
@@ -177,7 +180,7 @@ After the first LLM turn, if any `TOOL_USE` chunks were emitted:
 3. Each tool result becomes a `Message(role=TOOL, ...)` on the history.
 4. The agent re-enters the loop and calls the transport again.
 
-The loop caps at `max_tool_rounds` (default 5) to prevent runaway
+The loop caps at `max_tool_rounds` (default 20) to prevent runaway
 call chains. On the final turn with no more tool calls, the agent:
 
 - saves the final assistant message to the session,
@@ -232,9 +235,29 @@ After each successful `route()`:
    messages generated mid-loop.
 
 Messages are append-only; history trimming happens in memory at the
-agent layer (via a local slice in `_build_messages`) and does not mutate
-`session.history` or delete rows. The SQLite file is the source of
-truth for restarts.
+agent layer (token-budget trim in `_fit_history_to_budget`) and does
+not mutate `session.history` or delete rows. The SQLite file is the
+source of truth for restarts.
+
+### Session cache (`SessionManager`)
+
+The manager fronts the store with a **bounded, TTL'd LRU cache** keyed
+on `session.id`, plus a thin `(channel, sender) → session.id` lookup
+index:
+
+- **Primary cache**: `OrderedDict[session.id, (Session, last_access)]`
+  capped at `cache_size` (default 1000). On eviction the corresponding
+  entries in the channel-index are removed too, so indices can never
+  point at a dropped Session.
+- **Secondary index**: `{"channel:sender": session.id}`. Both the
+  explicit-id path (`--resume`, scheduler firings) and the implicit
+  channel+sender path resolve through this index, so both hit the
+  **same** `Session` object. Before the unification the two paths
+  maintained two distinct cached objects for the same conversation,
+  whose `history` lists could drift apart.
+- **TTL**: `ttl` (default 1 hour) is refreshed on every access. Hot
+  sessions stay resident; cold ones fall out and reload from the
+  store on next hit, which also picks up out-of-band DB edits.
 
 ## Subsystems
 
@@ -272,9 +295,9 @@ no imports — they're just instructions.
 
 ### MCP (`src/sanfuclaw/mcp_client/`)
 
-Configured under `[mcp.servers.<name>]` in `sanfuclaw.toml`. Each server
-can be spawned over stdio (`command` + `args` + `env`) or reached over
-SSE (`url`).
+Configured under `mcp.servers.<name>` in `~/.sanfuclaw/config.json`.
+Each server can be spawned over stdio (`command` + `args` + `env`) or
+reached over SSE (`url`).
 
 `MCPManager.start()`:
 
@@ -368,9 +391,17 @@ any other platform.
 5. **Buffer at the channel, not the agent.** Platform-specific streaming
    limitations stay behind the channel interface. The agent always
    streams; channels decide how to render.
-6. **History trimming at the agent.** Long sessions don't inflate token
-   cost because `_build_messages` caps history before every call. Rows
-   are preserved in SQLite — we only trim the *sent* context.
+6. **Token-budget history trimming, not message count.** Long sessions
+   don't inflate token cost because `_fit_history_to_budget` drops the
+   oldest messages until the estimated tokens fit
+   `context_window − (system_prompt + tool_schemas + max_tokens_output +
+   input_safety_margin)`. An earlier `max_history=20` slice coexisted
+   with this and was usually the active cap; it got dropped because a
+   20-round tool loop could easily blow past 20 messages and the agent
+   would then "forget" earlier tool_results and re-issue the same reads.
+   Trimming is pair-aware: an orphan `tool_result` at the head is
+   dropped alongside its missing `tool_use`. Rows stay in SQLite —
+   we only trim the *sent* context.
 7. **Usage is a first-class chunk.** `StreamChunkType.USAGE` carries
    input/output token counts. The OpenAI-compat transport deduplicates
    providers (like HPC-AI) that repeat usage in every streaming chunk
@@ -380,15 +411,42 @@ any other platform.
    4s). Agents never see transient 502s.
 9. **Tool schemas as JSON Schema.** Matches the Claude and OpenAI
    tool-use APIs one-to-one; no translation layer.
-10. **TOML config + env vars.** Secrets come from env (`LLM_API_KEY`,
-    `TELEGRAM_BOT_TOKEN`); structure comes from `sanfuclaw.toml`. The
-    file is gitignored so live credentials never land in git.
+10. **JSON config + env vars.** Secrets come from env
+    (`SANFUCLAW_LLM__API_KEY`, `TELEGRAM_BOT_TOKEN`); structure comes
+    from `~/.sanfuclaw/config.json` (relaxed to allow `//` comments and
+    trailing commas). TOML is still accepted for backward compatibility.
+    The file is gitignored so live credentials never land in git.
 11. **No ORM.** Three tables (`sessions`, `messages`, maybe one for
     hooks) is below the break-even point for any ORM. Raw `aiosqlite`
     is clearer and faster.
 12. **Graceful MCP degradation.** A failing MCP server logs an error
     and the app keeps running. One broken `npx` package cannot brick
     the whole agent.
+13. **Session cache: LRU + TTL + unified id.** `SessionManager`
+    single-sources on `session.id` and treats `(channel, sender)` as a
+    secondary index into the same `Session` object. The cache is
+    `OrderedDict`-backed (capacity 1000), with a 1-hour idle TTL
+    refreshed on access. Bounds memory in long-running daemons,
+    eliminates the double-cached-Session drift the old two-key layout
+    allowed, and lets out-of-band DB edits become visible after the
+    TTL lapses.
+14. **Shell tool: env allowlist + output cap.** `shell` is the
+    LLM-facing blast radius, so its subprocess gets only a safe env
+    subset (`PATH`, `HOME`, `LANG`, `LC_*`, `TERM`, `TZ`, `TMPDIR`,
+    `USER`, `LOGNAME`, `SHELL`, `PWD`) — no `SANFUCLAW_*` /
+    `*API_KEY*` / `*TOKEN*`, so a prompt-injected `echo $...` cannot
+    exfiltrate secrets through the reply. Combined stdout+stderr is
+    truncated at 100 KB with a `[truncated: ...]` notice to stop
+    `cat huge.bin` or `find /` from OOM-ing the agent or ballooning
+    the next turn's input.
+15. **Prompt the model toward batched tool use.** Two prompt surfaces
+    carry this guidance: `TOOL_EFFICIENCY_GUIDANCE` in the system
+    prompt (cross-tool meta-rule: one round ≈ one LLM call, so batch
+    or parallelize) and the `shell` tool's own `description`
+    (shell-specific patterns: `cat f1 f2 f3`, chain with `&&`/`;`,
+    `find ... -exec cat {} +`). Before this, Kimi-K2.5 would serialize
+    one `cat` per round and exhaust `max_tool_rounds` on trivial
+    codebase surveys.
 
 ## Current state
 
