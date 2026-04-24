@@ -54,6 +54,15 @@
     "dir": "~/.sanfuclaw/skills"
   },
 
+  // Memory — persistent cross-session notes. An optional MEMORY.md at
+  // the root is injected verbatim into the system prompt as the index;
+  // individual *.md files load on demand via the `load_memory` tool.
+  // Today read-only: entries are curated by hand (or a future
+  // save_memory tool). Drop the dir entirely to disable.
+  "memory": {
+    "dir": "~/.sanfuclaw/memory"
+  },
+
   // MCP (Model Context Protocol) servers.
   // Install the extra first: `pip install -e ".[mcp]"`.
   // Each server is either spawned over stdio (command/args/env) or reached

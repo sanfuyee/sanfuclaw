@@ -19,8 +19,10 @@ from sanfuclaw.gateway.scheduler import Scheduler
 from sanfuclaw.gateway.session_manager import SessionManager
 from sanfuclaw.mcp_client.manager import MCPManager
 from sanfuclaw.mcp_client.tool_adapter import MCPToolAdapter
+from sanfuclaw.memory.registry import MemoryRegistry
 from sanfuclaw.skills.registry import SkillRegistry
 from sanfuclaw.storage.base import Store
+from sanfuclaw.tools.memory_loader import LoadMemoryTool
 from sanfuclaw.tools.registry import ToolRegistry
 from sanfuclaw.tools.schedule import (
     ScheduleCreateTool,
@@ -119,6 +121,7 @@ async def build_router(
 ) -> Wiring:
     """Wire tools, MCP servers, transport, agent, router, and scheduler."""
     skill_registry = SkillRegistry(settings.skills.dir)
+    memory_registry = MemoryRegistry(settings.memory.dir)
 
     tool_registry = ToolRegistry()
     tool_registry.register(ShellTool())
@@ -129,6 +132,8 @@ async def build_router(
     tool_registry.register(ScheduleRemoveTool(store))
     if len(skill_registry) > 0:
         tool_registry.register(LoadSkillTool(skill_registry))
+    if len(memory_registry) > 0 or memory_registry.system_prompt_block():
+        tool_registry.register(LoadMemoryTool(memory_registry))
 
     mcp_manager = MCPManager(settings.mcp.servers)
     await mcp_manager.start()
@@ -138,11 +143,15 @@ async def build_router(
         tool_registry.register(MCPToolAdapter(server_name, mcp_tool, mcp_session))
         mcp_tool_count += 1
     logger.info(
-        "Tool registry ready: %d local + %d MCP tool(s) from %d skill(s)",
+        "Tool registry ready: %d local + %d MCP tool(s) from %d skill(s), %d memory entr(ies)",
         len(tool_registry.list_names()) - mcp_tool_count,
         mcp_tool_count,
         len(skill_registry),
+        len(memory_registry),
     )
+
+    memory_block = memory_registry.system_prompt_block()
+    memory_suffix = f"\n\n{memory_block}" if memory_block else ""
 
     transport = build_transport(settings)
     agent = LLMAgent(
@@ -154,6 +163,7 @@ async def build_router(
             f"{settings.llm.system_prompt}\n\n"
             f"{SCHEDULE_PROMPT_GUIDANCE}\n\n"
             f"{TOOL_EFFICIENCY_GUIDANCE}"
+            f"{memory_suffix}"
         ),
         model=settings.llm.model,
         max_tokens=settings.llm.max_tokens,

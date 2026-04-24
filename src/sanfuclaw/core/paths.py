@@ -34,3 +34,9 @@ def skills_dir() -> Path:
     d = home() / "skills"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def memory_dir() -> Path:
+    d = home() / "memory"
+    d.mkdir(parents=True, exist_ok=True)
+    return d

@@ -42,6 +42,10 @@ class SkillsConfig(BaseSettings):
     dir: str = "~/.sanfuclaw/skills"
 
 
+class MemoryConfig(BaseSettings):
+    dir: str = "~/.sanfuclaw/memory"
+
+
 class MCPServerConfig(BaseSettings):
     """One MCP server — either stdio (command/args/env) or SSE (url)."""
 
@@ -65,6 +69,7 @@ class Settings(BaseSettings):
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     channels: dict[str, ChannelConfig] = Field(default_factory=dict)
     skills: SkillsConfig = Field(default_factory=SkillsConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
     mcp: MCPConfig = Field(default_factory=MCPConfig)
 
     @classmethod
