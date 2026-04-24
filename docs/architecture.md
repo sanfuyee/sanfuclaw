@@ -1,7 +1,9 @@
 # Sanfuclaw Architecture
 
 > Design rationale and internals. For install/usage instructions see the
-> top-level [README](../README.md).
+> top-level [README](../README.md). For a conceptual primer on how
+> `system_prompt`, tools, skills, memory, and history fit together each
+> turn, see [concepts.md](concepts.md).
 
 ## Overview
 
