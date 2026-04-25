@@ -13,7 +13,7 @@ Design rationale: docs/installer-p0.md.
 """
 
 from pathlib import Path
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, copy_metadata
 
 # SPECPATH is set by PyInstaller to the directory of this spec file.
 project_root = Path(SPECPATH).parent  # noqa: F821 — injected by PyInstaller
@@ -62,6 +62,10 @@ datas = [
     (str(src_root / "sanfuclaw" / "webchat" / "index.html"),
      "sanfuclaw/webchat"),
 ]
+# Ship sanfuclaw's installed metadata (PKG-INFO etc.) so
+# `importlib.metadata.version("sanfuclaw")` resolves at runtime — the
+# version reported by `sanfuclaw version` is sourced from there.
+datas += copy_metadata("sanfuclaw")
 
 
 # ---------------------------------------------------------------------------
