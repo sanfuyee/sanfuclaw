@@ -82,7 +82,7 @@ class OpenAICompatTransport:
                     raise
 
         tool_calls_accumulator: dict[int, dict] = {}
-        reasoning_token_count = 0
+        reasoning_chunk_count = 0  # fallback if usage doesn't report reasoning_tokens
 
         last_usage = None
 
@@ -96,10 +96,17 @@ class OpenAICompatTransport:
             delta = chunk.choices[0].delta
 
             # Reasoning content (Kimi, DeepSeek-R1, QwQ, etc.)
-            # Silently count — these are internal thinking tokens, not user-facing.
+            # Forward as a REASONING_DELTA chunk so the agent can persist the
+            # full text on the assistant message — DeepSeek requires the
+            # original `reasoning_content` to be replayed in history on every
+            # subsequent turn or it returns 400.
             reasoning = getattr(delta, "reasoning_content", None)
             if reasoning:
-                reasoning_token_count += 1  # approximate: 1 chunk ≈ 1 token
+                reasoning_chunk_count += 1
+                yield StreamChunk(
+                    type=StreamChunkType.REASONING_DELTA,
+                    data=reasoning,
+                )
 
             # Text content
             if delta.content:
@@ -172,7 +179,7 @@ class OpenAICompatTransport:
             if completion_details is not None:
                 reasoning = getattr(completion_details, "reasoning_tokens", 0) or 0
             if not reasoning:
-                reasoning = reasoning_token_count
+                reasoning = reasoning_chunk_count
 
             yield StreamChunk(
                 type=StreamChunkType.USAGE,

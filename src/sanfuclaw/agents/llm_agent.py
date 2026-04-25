@@ -163,6 +163,7 @@ class LLMAgent:
             step_label = "LLM" if round_num == 0 else "LLM (follow-up)"
 
             full_response = ""
+            full_reasoning = ""  # accumulated thinking-mode content (DeepSeek-R1 etc.)
             tool_calls: list[StreamChunk] = []
             step_input = 0
             step_output = 0
@@ -173,6 +174,11 @@ class LLMAgent:
                 if chunk.type == StreamChunkType.TEXT_DELTA:
                     full_response += chunk.data
                     yield chunk.data
+                elif chunk.type == StreamChunkType.REASONING_DELTA:
+                    # Accumulate but don't yield — reasoning is internal scratch
+                    # pad, not user-facing. We persist it so DeepSeek-style
+                    # thinking models accept it back on the next turn.
+                    full_reasoning += chunk.data
                 elif chunk.type == StreamChunkType.TOOL_USE and chunk.tool_input is not None:
                     tool_calls.append(chunk)
                 elif chunk.type == StreamChunkType.USAGE:
@@ -193,24 +199,34 @@ class LLMAgent:
             note_str = f" ({', '.join(notes)})" if notes else ""
             trace.append(f"{step_label}: {step_input} in / {step_output} out{note_str}")
 
+            # Build metadata for this assistant turn. Always include
+            # reasoning_content if the model emitted any — DeepSeek's thinking
+            # mode (and similar) require the original reasoning to come back
+            # in subsequent turns or the API rejects the history with 400.
+            assistant_metadata: dict = {}
+            if full_reasoning:
+                assistant_metadata["reasoning_content"] = full_reasoning
+
             if not tool_calls:
                 # Save only the LLM's actual response, not the trace
                 session.add_message(Message(
                     role=MessageRole.ASSISTANT,
                     content=full_response,
                     session_id=session.id,
+                    metadata=assistant_metadata,
                 ))
                 break
 
             # Save assistant message with tool calls
+            assistant_metadata["tool_calls"] = [
+                {"name": tc.tool_name, "id": tc.tool_call_id, "input": tc.tool_input}
+                for tc in tool_calls
+            ]
             session.add_message(Message(
                 role=MessageRole.ASSISTANT,
                 content=full_response,
                 session_id=session.id,
-                metadata={"tool_calls": [
-                    {"name": tc.tool_name, "id": tc.tool_call_id, "input": tc.tool_input}
-                    for tc in tool_calls
-                ]},
+                metadata=assistant_metadata,
             ))
 
             # Execute tools
@@ -238,10 +254,14 @@ class LLMAgent:
             exhausted = True
             notice = f"\n\n[Reached max tool rounds ({max_tool_rounds}). Send another message to continue.]"
             yield notice
+            exhaust_metadata: dict = {}
+            if full_reasoning:
+                exhaust_metadata["reasoning_content"] = full_reasoning
             session.add_message(Message(
                 role=MessageRole.ASSISTANT,
                 content=full_response + notice,
                 session_id=session.id,
+                metadata=exhaust_metadata,
             ))
 
         # Stash the per-turn trace for the router to deliver out-of-band.
@@ -308,7 +328,15 @@ class LLMAgent:
             return args[:150]
 
     def _build_openai_tool_messages(self, history: list[Message]) -> list[dict]:
-        """Build messages with tool use/results in OpenAI format."""
+        """Build messages with tool use/results in OpenAI format.
+
+        Assistant turns may carry `reasoning_content` in metadata when the
+        upstream is a thinking-mode model (DeepSeek-R1, Kimi reasoning, QwQ).
+        Those providers require the original reasoning_content to be
+        replayed verbatim in history — omitting it triggers a 400. For
+        non-thinking providers the field is simply absent, and the extra
+        key (when carried over from a mixed history) is ignored.
+        """
         messages = []
         for msg in history:
             if msg.role == MessageRole.ASSISTANT and "tool_calls" in msg.metadata:
@@ -325,6 +353,12 @@ class LLMAgent:
                 m: dict = {"role": "assistant", "tool_calls": tool_calls}
                 if msg.content:
                     m["content"] = msg.content
+                if msg.metadata.get("reasoning_content"):
+                    m["reasoning_content"] = msg.metadata["reasoning_content"]
+                messages.append(m)
+            elif msg.role == MessageRole.ASSISTANT and msg.metadata.get("reasoning_content"):
+                m = {"role": "assistant", "content": msg.content,
+                     "reasoning_content": msg.metadata["reasoning_content"]}
                 messages.append(m)
             elif msg.role == MessageRole.TOOL:
                 messages.append({
