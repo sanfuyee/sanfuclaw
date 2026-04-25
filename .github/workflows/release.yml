@@ -21,9 +21,6 @@ jobs:
           - os: macos-14
             asset: sanfuclaw-macos-arm64
             binary: sanfuclaw
-          - os: macos-13
-            asset: sanfuclaw-macos-x86_64
-            binary: sanfuclaw
           - os: ubuntu-22.04
             asset: sanfuclaw-linux-x86_64
             binary: sanfuclaw

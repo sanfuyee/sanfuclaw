@@ -242,7 +242,6 @@ jobs:
       matrix:
         include:
           - { os: macos-14,     arch: arm64,  asset: sanfuclaw-macos-arm64   }
-          - { os: macos-13,     arch: x86_64, asset: sanfuclaw-macos-x86_64  }
           - { os: ubuntu-22.04, arch: x86_64, asset: sanfuclaw-linux-x86_64  }
           - { os: windows-latest, arch: x86_64, asset: sanfuclaw-windows-x86_64.exe }
     runs-on: ${{ matrix.os }}
@@ -284,7 +283,6 @@ Insert a new top section **before** the existing `Quick Start` heading:
 1. Download the binary for your platform from the
    [Releases page](https://github.com/sanfuyee/sanfuclaw/releases):
    - macOS (Apple Silicon): `sanfuclaw-macos-arm64`
-   - macOS (Intel):         `sanfuclaw-macos-x86_64`
    - Linux (x86_64):        `sanfuclaw-linux-x86_64`
    - Windows:               `sanfuclaw-windows-x86_64.exe`
 2. Make it executable (macOS/Linux only):
