@@ -19,26 +19,35 @@ A local-first personal AI agent inspired by [OpenClaw](https://github.com/opencl
 
 ### For non-programmers (recommended)
 
-No Python, no pip, no venv — one download and one command.
+No Python, no pip, no venv. Pick whichever path matches your platform.
+
+#### macOS — Homebrew (one-line install)
+
+```bash
+brew tap sanfuyee/sanfuclaw
+brew install sanfuclaw
+sanfuclaw setup        # interactive wizard — picks provider, API key, channels
+sanfuclaw start        # chat in the terminal
+```
+
+`brew upgrade sanfuclaw` later picks up new releases automatically. No
+Gatekeeper warnings — Homebrew handles the trust dance for you.
+
+#### Linux / Windows — direct download
 
 1. Go to the [Releases page](https://github.com/sanfuyee/sanfuclaw/releases)
    and download the binary for your platform:
-   - macOS (Apple Silicon — M1/M2/M3/M4): `sanfuclaw-macos-arm64`
    - Linux (x86_64): `sanfuclaw-linux-x86_64`
    - Windows: `sanfuclaw-windows-x86_64.exe`
-
-   Intel Macs aren't covered by the prebuilt binaries — see
-   [docs/developers.md](docs/developers.md) for the source install path.
-2. Make it runnable and move it somewhere on `PATH`:
+2. Make it runnable and put it somewhere on `PATH`:
    ```bash
-   # macOS / Linux
-   chmod +x ~/Downloads/sanfuclaw-*
-   sudo mv ~/Downloads/sanfuclaw-* /usr/local/bin/sanfuclaw
+   # Linux
+   chmod +x ~/Downloads/sanfuclaw-linux-x86_64
+   sudo mv ~/Downloads/sanfuclaw-linux-x86_64 /usr/local/bin/sanfuclaw
    ```
    On Windows, rename to `sanfuclaw.exe` and put it in a folder that's on
    `PATH` (or just run it from the download folder).
-3. Run the setup wizard — it asks plain questions and writes the config
-   for you:
+3. Run the setup wizard:
    ```bash
    sanfuclaw setup
    ```
@@ -47,17 +56,25 @@ No Python, no pip, no venv — one download and one command.
    sanfuclaw start
    ```
 
-The wizard handles LLM provider selection (HPC-AI, Moonshot, DeepSeek,
-OpenAI, Anthropic, or local Ollama), API key, messaging channels, optional
-MCP tools, and background autostart. Re-run it anytime to change settings —
-your existing config is backed up automatically.
+#### macOS — direct download (without Homebrew)
 
-#### macOS first-run warning
+Same as Linux above, but use the `sanfuclaw-macos-arm64` asset (Apple
+Silicon only — M1/M2/M3/M4). The binary is not code-signed, so on first
+launch macOS will block it with *"cannot be opened because the developer
+cannot be verified."* Right-click → **Open** → **Open** in the dialog.
+One-time hassle. Homebrew avoids this entirely, which is why it's the
+recommended path on macOS.
 
-The binary is not yet code-signed. On first launch macOS will block it
-with *"cannot be opened because the developer cannot be verified."*
-Right-click the binary → **Open** → **Open** in the confirmation dialog.
-You only need to do this once.
+Intel Macs aren't covered by the prebuilt binaries — see
+[docs/developers.md](docs/developers.md) for the source install path.
+
+#### About the wizard
+
+`sanfuclaw setup` handles LLM provider selection (HPC-AI, Moonshot,
+DeepSeek, OpenAI, Anthropic, or local Ollama), API key, messaging
+channels, optional MCP tools, and background autostart. Re-run it
+anytime to change settings — your existing config is backed up
+automatically.
 
 ### For developers
 
