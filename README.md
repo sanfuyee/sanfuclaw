@@ -15,50 +15,86 @@ A local-first personal AI agent inspired by [OpenClaw](https://github.com/opencl
 - **Event hooks**: Pluggable event system for custom integrations
 - **Streaming-first**: Real-time response streaming across all channels
 
-## Quick Start
+## Install
 
-### Install
+### For non-programmers (recommended)
 
-Requires Python ≥ 3.12. Recommended: install into an isolated venv so it
-doesn't pollute the system Python.
+No Python, no pip, no venv. Pick whichever path matches your platform.
+
+#### macOS — Homebrew (one-line install)
 
 ```bash
-# 1. Get the code
-git clone https://github.com/sanfuyee/sanfuclaw.git
-cd sanfuclaw
-
-# 2. Create and activate a venv
-python3 -m venv .venv
-source .venv/bin/activate              # Windows: .venv\Scripts\activate
-
-# 3. Upgrade pip (avoids resolver warnings on older base pythons)
-python -m pip install --upgrade pip
-
-# 4. Install (editable — source edits take effect immediately)
-pip install -e .
-
-# 5. Verify
-sanfuclaw --help
+brew tap sanfuyee/sanfuclaw
+brew install sanfuclaw
+sanfuclaw setup        # interactive wizard — picks provider, API key, channels
+sanfuclaw start        # chat in the terminal
 ```
 
-All channel and MCP dependencies are bundled. The runtime only starts what you
-declare in your config file (e.g. a Telegram bot under `[channels.telegram]`,
-an MCP server under `[mcp.servers.*]`), so unused integrations cost nothing
-beyond install size.
+`brew upgrade sanfuclaw` later picks up new releases automatically. No
+Gatekeeper warnings — Homebrew handles the trust dance for you.
 
-> Every new shell needs `source .venv/bin/activate` before `sanfuclaw` is on
-> `PATH`. For a background service you skip activation — `sanfuclaw service
-> install` bakes the venv's absolute path into the unit file (see
-> [Run as a background service](#run-as-a-background-service)).
+#### Linux / Windows — direct download
 
-The first time you run any `sanfuclaw` command it auto-creates
-`~/.sanfuclaw/config.json` (template) and `~/.sanfuclaw/skills/`. No
-extra setup step is required — just run `sanfuclaw --help` once, then
-edit the config.
+1. Go to the [Releases page](https://github.com/sanfuyee/sanfuclaw/releases)
+   and download the binary for your platform:
+   - Linux (x86_64): `sanfuclaw-linux-x86_64`
+   - Windows: `sanfuclaw-windows-x86_64.exe`
+2. Make it runnable and put it somewhere on `PATH`:
+   ```bash
+   # Linux
+   chmod +x ~/Downloads/sanfuclaw-linux-x86_64
+   sudo mv ~/Downloads/sanfuclaw-linux-x86_64 /usr/local/bin/sanfuclaw
+   ```
+   On Windows, rename to `sanfuclaw.exe` and put it in a folder that's on
+   `PATH` (or just run it from the download folder).
+3. Run the setup wizard:
+   ```bash
+   sanfuclaw setup
+   ```
+4. Start chatting:
+   ```bash
+   sanfuclaw start
+   ```
 
-### Configure
+#### macOS — direct download (without Homebrew)
 
-Edit `~/.sanfuclaw/config.json`:
+Same as Linux above, but use the `sanfuclaw-macos-arm64` asset (Apple
+Silicon only — M1/M2/M3/M4). The binary is not code-signed, so on first
+launch macOS will block it with *"cannot be opened because the developer
+cannot be verified."* Right-click → **Open** → **Open** in the dialog.
+One-time hassle. Homebrew avoids this entirely, which is why it's the
+recommended path on macOS.
+
+Intel Macs aren't covered by the prebuilt binaries — see
+[docs/developers.md](docs/developers.md) for the source install path.
+
+#### About the wizard
+
+`sanfuclaw setup` handles LLM provider selection (HPC-AI, Moonshot,
+DeepSeek, OpenAI, Anthropic, or local Ollama), API key, messaging
+channels, optional MCP tools, and background autostart. Re-run it
+anytime to change settings — your existing config is backed up
+automatically.
+
+### For developers
+
+Building from source (clone → venv → `pip install -e .`), running
+tests, building a binary locally, and cutting a release: see
+[docs/developers.md](docs/developers.md).
+
+## Configure
+
+Easiest path — run the wizard:
+
+```bash
+sanfuclaw setup
+```
+
+It asks plain questions (provider, API key, channels, MCP, autostart) and
+writes the config for you. Running it again backs up the existing file to
+`config.json.bak.<timestamp>` before overwriting.
+
+For manual edits, open `~/.sanfuclaw/config.json`:
 
 ```json
 {
@@ -77,7 +113,7 @@ Edit `~/.sanfuclaw/config.json`:
 Or set secrets via environment variables:
 
 ```bash
-export LLM_API_KEY="your-key"
+export SANFUCLAW_LLM__API_KEY="your-key"
 export TELEGRAM_BOT_TOKEN="your-bot-token"
 ```
 
@@ -85,37 +121,37 @@ Config resolution order: `--config <path>` → `$SANFUCLAW_CONFIG` →
 `~/.sanfuclaw/config.json` → `./sanfuclaw.toml` (legacy). Override the home
 directory itself with `$SANFUCLAW_HOME`.
 
-### Uninstall
+## Uninstall
+
+1. Stop any background service first (if you installed one):
+   ```bash
+   sanfuclaw service uninstall
+   ```
+2. Delete the binary:
+   ```bash
+   rm /usr/local/bin/sanfuclaw    # or wherever you put it
+   ```
+3. *(Optional)* Drop your user data — config, sessions, credentials,
+   skills, memory:
+   ```bash
+   rm -rf ~/.sanfuclaw/
+   ```
+
+User data is kept by default so a reinstall picks up where you left off.
+
+> Source install (`pip install -e .`)? Use `pip uninstall sanfuclaw`
+> instead of step 2. See [docs/developers.md](docs/developers.md).
+
+## Run
 
 ```bash
-pip uninstall sanfuclaw    # remove the package
-rm -rf ~/.sanfuclaw/       # optional: drop user data (config, sessions, credentials)
-```
-
-`pip uninstall` removes only the Python package — Python packaging has no
-post-uninstall hook, so user data in `~/.sanfuclaw/` stays put unless you
-remove it yourself.
-
-### Run
-
-There are two equivalent entry points — pick whichever fits the situation:
-
-| Form | When to use |
-|------|-------------|
-| `python -m sanfuclaw <cmd>` | Source/debug mode — run straight out of a checkout, no install required beyond `pip install -e .`. Good for iterating on code, reading tracebacks against the working tree, running with a non-default Python. |
-| `sanfuclaw <cmd>` | Installed entry point — registered by `[project.scripts]`. Good for daily use, shell aliases, and background service units (systemd / launchd). |
-
-Both resolve to the same CLI; all flags, subcommands, and exit codes are identical.
-
-```bash
-# CLI chat mode
+# Chat in the terminal
 sanfuclaw start
-python -m sanfuclaw start                 # equivalent (debug mode)
 
 # Single messaging channel
 sanfuclaw start --channel telegram
 
-# All channels declared in config (Telegram + WeChat + Discord + …)
+# All channels declared in your config at once
 sanfuclaw start --channel all
 
 # Gateway server (WebChat + REST API + WebSocket)
@@ -137,15 +173,17 @@ sanfuclaw cron remove <ID>
 #   "每天下午2点给我发明天的天气"
 
 # Cron is interpreted in your configured timezone (default: Asia/Shanghai)
-# Set top-level `timezone` in ~/.sanfuclaw/config.json or sanfuclaw.toml
+# Set top-level `timezone` in ~/.sanfuclaw/config.json.
 ```
 
 ### Run as a background service
 
 The bundled `sanfuclaw service` command wraps **systemd** (Linux) and
 **launchd** (macOS). It renders unit files into `~/.sanfuclaw/systemd/` or
-`~/.sanfuclaw/launchd/` with the current venv's absolute path baked in, then
-optionally symlinks them into the user-level service directory and starts them.
+`~/.sanfuclaw/launchd/` with the `sanfuclaw` binary's absolute path baked
+in (works for both the prebuilt binary and a `pip install` source
+checkout), then optionally symlinks them into the user-level service
+directory and starts them.
 
 ```bash
 # Quick foreground smoke test first
@@ -182,13 +220,70 @@ them in place for custom flags, then reload:
 
 #### Logs
 
-```bash
-# Linux
-journalctl --user -u sanfuclaw-agent -f        # streaming
-systemctl --user status sanfuclaw-agent        # snapshot
+Where runtime output goes depends on the service manager.
 
-# macOS
-tail -f ~/.sanfuclaw/agent.log
+##### Linux (systemd → journald)
+
+```bash
+# Stream agent + serve together (Ctrl-C to exit)
+journalctl --user -u sanfuclaw-agent -u sanfuclaw-serve -f
+
+# Just agent, last 100 lines
+journalctl --user -u sanfuclaw-agent -n 100
+
+# Errors only, today
+journalctl --user -u sanfuclaw-agent -p err --since today
+
+# Snapshot status (running / failed / inactive)
+systemctl --user status sanfuclaw-agent sanfuclaw-serve
+```
+
+journald rotates automatically — no manual cleanup needed.
+
+##### macOS (launchd → files under `~/.sanfuclaw/`)
+
+```bash
+# Stream both units together
+tail -f ~/.sanfuclaw/agent.log ~/.sanfuclaw/serve.log
+
+# Just the last chunk
+tail -100 ~/.sanfuclaw/agent.log
+
+# Errors (stderr)
+tail -f ~/.sanfuclaw/agent.err ~/.sanfuclaw/serve.err
+
+# Snapshot status — first column is the PID (number = running, `-` = loaded but dead)
+launchctl list | grep sanfuclaw
+
+# Truncate if the file grows too big (the running service keeps writing)
+: > ~/.sanfuclaw/agent.log
+```
+
+The file paths are baked into the rendered plists (see
+`src/sanfuclaw/cli_service.py`), so they're stable across restarts.
+
+##### Empty log = service never started
+
+If `agent.log` is 0 bytes or `journalctl` has no entries, the service
+tried to start and failed before the first log line. Typical causes:
+
+- `llm.api_key` empty → `MissingAPIKey` at startup
+- Telegram `bot_token` invalid → Telegram handshake fails
+- Gateway port 30423 already in use → `sanfuclaw-serve` can't bind
+
+Check the error stream (`.err` file on macOS, same `journalctl` command on
+Linux) for the traceback.
+
+##### Chat history is separate
+
+The commands above show **runtime logs** (process startup, tool calls,
+errors). Actual conversation content (user/assistant messages) lives in
+SQLite, not in the logs. Browse it with:
+
+```bash
+sanfuclaw sessions               # recent sessions across all channels
+sanfuclaw sessions --channel telegram
+sanfuclaw start --resume <id>    # replay / continue a session
 ```
 
 #### Without a service manager (nohup)
@@ -472,11 +567,8 @@ skills/         # User skill library (*.md)
 
 ## Contributing
 
-```bash
-pip install -e ".[dev]"   # adds pytest, pytest-asyncio, ruff, mypy
-pytest
-ruff check src/
-```
+Dev setup, tests, lint, and release process are documented in
+[docs/developers.md](docs/developers.md).
 
 ## License
 

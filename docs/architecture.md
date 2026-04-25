@@ -525,6 +525,14 @@ All core components are implemented:
 - ✅ **Gateway**: FastAPI WebSocket + HTTP + WebChat UI.
 - ✅ **Scheduler**: cron-driven prompts that synthesize envelopes into
   any registered channel; CLI CRUD via `sanfuclaw cron`.
+- ✅ **Setup wizard**: `sanfuclaw setup` collects LLM/channel/MCP/autostart
+  choices interactively and writes a complete `~/.sanfuclaw/config.json`.
+  Auto-triggers on first run when stdin is a TTY; falls back to the
+  commented template in headless contexts. Design: `docs/installer-p0.md`.
+- 🟡 **Prebuilt binaries**: PyInstaller spec (`packaging/sanfuclaw.spec`)
+  + release workflow (`.github/workflows/release.yml`) produce single-file
+  binaries for macOS (arm64/x86_64), Linux (x86_64), and Windows on
+  `v*` tag push. First release not yet cut.
 
 Known gaps, in rough priority order:
 
