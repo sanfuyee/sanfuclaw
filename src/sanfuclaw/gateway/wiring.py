@@ -32,6 +32,7 @@ from sanfuclaw.tools.schedule import (
 )
 from sanfuclaw.tools.shell import ShellTool
 from sanfuclaw.tools.skill_loader import LoadSkillTool
+from sanfuclaw.tools.weather import WeatherTool
 from sanfuclaw.tools.web_fetch import WebFetchTool
 from sanfuclaw.tools.web_search import WebSearchTool
 
@@ -144,6 +145,7 @@ async def build_router(
     tool_registry.register(ShellTool())
     tool_registry.register(WebSearchTool())
     tool_registry.register(WebFetchTool())
+    tool_registry.register(WeatherTool())
     tool_registry.register(ScheduleCreateTool(store, default_timezone=settings.timezone))
     tool_registry.register(ScheduleListTool(store))
     tool_registry.register(ScheduleSetEnabledTool(store, default_timezone=settings.timezone))

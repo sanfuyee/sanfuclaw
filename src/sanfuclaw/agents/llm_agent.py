@@ -365,6 +365,8 @@ class LLMAgent:
             return tool_input.get("url", "")
         elif tool_name == "web_search":
             return tool_input.get("query", "")
+        elif tool_name == "weather":
+            return tool_input.get("location", "")
         else:
             args = ", ".join(f"{k}={v!r}" for k, v in tool_input.items())
             return args[:150]
