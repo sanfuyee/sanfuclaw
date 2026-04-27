@@ -330,6 +330,8 @@ class LLMAgent:
             return f"`{tool_input.get('command', '')}`"
         elif tool_name == "web_fetch":
             return tool_input.get("url", "")
+        elif tool_name == "web_search":
+            return tool_input.get("query", "")
         else:
             args = ", ".join(f"{k}={v!r}" for k, v in tool_input.items())
             return args[:150]
