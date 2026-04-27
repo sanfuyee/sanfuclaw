@@ -165,14 +165,36 @@ class SQLiteStore:
                 for row in rows
             ]
 
-    async def get_history(self, session_id: str, limit: int = 50) -> list[Message]:
+    async def get_history(
+        self,
+        session_id: str,
+        limit: int | None = None,
+        before: str | None = None,
+    ) -> list[Message]:
         db = self._ensure_db()
-        async with db.execute(
-            "SELECT id, role, content, channel_id, sender_id, metadata, timestamp, session_id FROM messages WHERE session_id = ? ORDER BY timestamp ASC LIMIT ?",
-            (session_id, limit),
-        ) as cursor:
+        cols = "id, role, content, channel_id, sender_id, metadata, timestamp, session_id"
+        if limit is None:
+            # Full history for agent rehydration: chronological, no cap.
+            sql = f"SELECT {cols} FROM messages WHERE session_id = ? ORDER BY timestamp ASC"
+            params: tuple = (session_id,)
+        else:
+            # Paginated UI listing: take the most recent N (optionally older
+            # than `before` cursor), then return chronological so the caller
+            # can render top→bottom without re-sorting.
+            where = "session_id = ?"
+            params = (session_id,)
+            if before is not None:
+                where += " AND timestamp < ?"
+                params = (session_id, before)
+            sql = (
+                f"SELECT {cols} FROM messages WHERE {where} "
+                "ORDER BY timestamp DESC LIMIT ?"
+            )
+            params = (*params, limit)
+
+        async with db.execute(sql, params) as cursor:
             rows = await cursor.fetchall()
-            return [
+            messages = [
                 Message(
                     role=MessageRole(row[1]),
                     content=row[2],
@@ -185,6 +207,9 @@ class SQLiteStore:
                 )
                 for row in rows
             ]
+            if limit is not None:
+                messages.reverse()
+            return messages
 
     # --- Schedules ---
 
