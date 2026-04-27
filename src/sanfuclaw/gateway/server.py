@@ -80,10 +80,12 @@ class GatewayServer:
             return await self.store.list_sessions(limit=50)
 
         @app.get("/api/sessions/{session_id}/messages")
-        async def get_messages(session_id: str, limit: int = 50):
+        async def get_messages(
+            session_id: str, limit: int = 50, before: str | None = None,
+        ):
             if not self.store:
                 return []
-            messages = await self.store.get_history(session_id, limit)
+            messages = await self.store.get_history(session_id, limit, before)
             return [
                 {"id": m.id, "role": m.role.value, "content": m.content, "timestamp": m.timestamp.isoformat()}
                 for m in messages

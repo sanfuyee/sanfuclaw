@@ -58,6 +58,42 @@ Both resolve to the same Typer app — flags, subcommands, and exit codes
 are identical. Prefer `python -m sanfuclaw` when you're debugging the CLI
 itself; prefer `sanfuclaw` for everything else.
 
+### Edit-and-run loop
+
+`pip install -e .` is the magic — `-e` (editable) drops a pointer in
+`site-packages` aimed at `src/sanfuclaw/`, so source edits take effect
+the next time the process starts. No reinstall, no restart of the venv.
+
+The full debug loop:
+
+```bash
+# Terminal 1 — edit
+vim src/sanfuclaw/agents/llm_agent.py
+
+# Terminal 2 — run
+python -m sanfuclaw start
+
+# Done with this turn? Ctrl-C, save more edits, re-run. Same loop.
+```
+
+Two flags worth knowing:
+
+- **`SANFUCLAW_HOME=/tmp/sf-debug`** — point everything (config,
+  sessions DB, skills) at a throwaway directory so debug runs don't
+  pollute your real `~/.sanfuclaw/`. Delete with `rm -rf /tmp/sf-debug`
+  when you're done.
+- **`--resume <id>`** — replay a specific session. Combined with
+  `breakpoint()` inside a hot path (e.g. `_build_openai_tool_messages`),
+  you can reproduce a multi-turn bug at exactly the failing step:
+
+  ```bash
+  python -m sanfuclaw start --resume cli-4cea
+  # next user message hits the breakpoint
+  ```
+
+  `pp messages` in the resulting pdb prompt is the fastest way to see
+  what's actually being sent to the LLM.
+
 ## Uninstall (source install)
 
 ```bash

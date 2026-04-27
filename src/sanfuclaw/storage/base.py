@@ -21,7 +21,23 @@ class Store(Protocol):
     async def save_message(self, message: Message) -> None:
         ...
 
-    async def get_history(self, session_id: str, limit: int = 50) -> list[Message]:
+    async def get_history(
+        self,
+        session_id: str,
+        limit: int | None = None,
+        before: str | None = None,
+    ) -> list[Message]:
+        """Return messages for a session in chronological order.
+
+        ``limit=None`` (default) returns the full history — required when
+        rehydrating a Session for an agent, since the agent's own
+        token-budget logic decides what to send to the LLM.
+
+        With an explicit ``limit`` (UI/API path), returns the most recent
+        ``limit`` messages, still in chronological order. Pass ``before``
+        (an ISO timestamp) to page further back: returns up to ``limit``
+        messages strictly older than that cursor.
+        """
         ...
 
     async def save_session(self, session: Session) -> None:

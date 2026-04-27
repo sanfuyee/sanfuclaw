@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import platform
+from datetime import date
 from typing import AsyncIterator
 
+from sanfuclaw.core.errors import ToolError
 from sanfuclaw.core.message import Envelope, Message
 from sanfuclaw.core.session import Session
 from sanfuclaw.core.types import MessageRole, StreamChunkType
@@ -15,6 +19,19 @@ from sanfuclaw.skills.registry import SkillRegistry
 from sanfuclaw.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+
+def _build_env_block() -> str:
+    """Snapshot of the process's runtime environment, injected into the
+    system prompt so the agent knows where it lives. Captured once at
+    agent construction — pwd/platform/shell don't change mid-process."""
+    return (
+        "Process environment:\n"
+        f"- Working directory: {os.getcwd()}\n"
+        f"- User: {os.environ.get('USER', '(unknown)')}\n"
+        f"- Platform: {platform.system()} {platform.release()} ({platform.machine()})\n"
+        f"- Shell: {os.environ.get('SHELL', '(unknown)')}"
+    )
 
 
 class LLMAgent:
@@ -41,6 +58,7 @@ class LLMAgent:
         if skill_registry and len(skill_registry) > 0:
             system_prompt = system_prompt + "\n" + skill_registry.system_prompt_block()
         self._system_prompt = system_prompt
+        self._env_block = _build_env_block()
         self._model = model
         self._max_tokens = max_tokens
         self._context_window = context_window
@@ -124,6 +142,22 @@ class LLMAgent:
         )
         return history[i:]
 
+    def _system_prompt_for_now(self) -> str:
+        """System prompt with today's date and process environment prepended.
+
+        Without these the model has no idea what 'today' is or where shell
+        commands run — it falls back to training-cutoff facts and guesses
+        paths. The date piece is rebuilt per turn so a long-running process
+        picks up the new day after midnight; the env block is captured
+        once at __init__ since pwd/platform/shell don't change mid-run.
+        """
+        today = date.today()
+        return (
+            f"Today's date is {today.isoformat()} ({today.strftime('%A')}).\n\n"
+            f"{self._env_block}\n\n"
+            f"{self._system_prompt}"
+        )
+
     async def _stream_llm(
         self, messages: list[dict], tools: list[dict] | None,
     ) -> AsyncIterator[StreamChunk]:
@@ -134,7 +168,7 @@ class LLMAgent:
             model=self._model,
             max_tokens=self._max_tokens,
             temperature=self._temperature,
-            system=self._system_prompt,
+            system=self._system_prompt_for_now(),
         ):
             yield chunk
 
@@ -163,6 +197,7 @@ class LLMAgent:
             step_label = "LLM" if round_num == 0 else "LLM (follow-up)"
 
             full_response = ""
+            full_reasoning = ""  # accumulated thinking-mode content (DeepSeek-R1 etc.)
             tool_calls: list[StreamChunk] = []
             step_input = 0
             step_output = 0
@@ -173,6 +208,11 @@ class LLMAgent:
                 if chunk.type == StreamChunkType.TEXT_DELTA:
                     full_response += chunk.data
                     yield chunk.data
+                elif chunk.type == StreamChunkType.REASONING_DELTA:
+                    # Accumulate but don't yield — reasoning is internal scratch
+                    # pad, not user-facing. We persist it so DeepSeek-style
+                    # thinking models accept it back on the next turn.
+                    full_reasoning += chunk.data
                 elif chunk.type == StreamChunkType.TOOL_USE and chunk.tool_input is not None:
                     tool_calls.append(chunk)
                 elif chunk.type == StreamChunkType.USAGE:
@@ -193,24 +233,34 @@ class LLMAgent:
             note_str = f" ({', '.join(notes)})" if notes else ""
             trace.append(f"{step_label}: {step_input} in / {step_output} out{note_str}")
 
+            # Build metadata for this assistant turn. Always include
+            # reasoning_content if the model emitted any — DeepSeek's thinking
+            # mode (and similar) require the original reasoning to come back
+            # in subsequent turns or the API rejects the history with 400.
+            assistant_metadata: dict = {}
+            if full_reasoning:
+                assistant_metadata["reasoning_content"] = full_reasoning
+
             if not tool_calls:
                 # Save only the LLM's actual response, not the trace
                 session.add_message(Message(
                     role=MessageRole.ASSISTANT,
                     content=full_response,
                     session_id=session.id,
+                    metadata=assistant_metadata,
                 ))
                 break
 
             # Save assistant message with tool calls
+            assistant_metadata["tool_calls"] = [
+                {"name": tc.tool_name, "id": tc.tool_call_id, "input": tc.tool_input}
+                for tc in tool_calls
+            ]
             session.add_message(Message(
                 role=MessageRole.ASSISTANT,
                 content=full_response,
                 session_id=session.id,
-                metadata={"tool_calls": [
-                    {"name": tc.tool_name, "id": tc.tool_call_id, "input": tc.tool_input}
-                    for tc in tool_calls
-                ]},
+                metadata=assistant_metadata,
             ))
 
             # Execute tools
@@ -223,9 +273,15 @@ class LLMAgent:
                 try:
                     result = await self._tools.execute(tc.tool_name, tc.tool_input, session)
                     result_str = result if isinstance(result, str) else json.dumps(result)
+                except ToolError as e:
+                    # Controlled failure — the LLM is meant to read the message
+                    # and recover (try a different source / give up gracefully).
+                    # No traceback: it's not a bug, just a tool-level outcome.
+                    result_str = f"Error: {e}"
+                    logger.warning("Tool %s failed: %s", tc.tool_name, e)
                 except Exception as e:
                     result_str = f"Error: {e}"
-                    logger.exception("Tool %s raised during execute()", tc.tool_name)
+                    logger.exception("Tool %s raised unexpectedly", tc.tool_name)
 
                 session.add_message(Message(
                     role=MessageRole.TOOL,
@@ -238,10 +294,14 @@ class LLMAgent:
             exhausted = True
             notice = f"\n\n[Reached max tool rounds ({max_tool_rounds}). Send another message to continue.]"
             yield notice
+            exhaust_metadata: dict = {}
+            if full_reasoning:
+                exhaust_metadata["reasoning_content"] = full_reasoning
             session.add_message(Message(
                 role=MessageRole.ASSISTANT,
                 content=full_response + notice,
                 session_id=session.id,
+                metadata=exhaust_metadata,
             ))
 
         # Stash the per-turn trace for the router to deliver out-of-band.
@@ -303,12 +363,24 @@ class LLMAgent:
             return f"`{tool_input.get('command', '')}`"
         elif tool_name == "web_fetch":
             return tool_input.get("url", "")
+        elif tool_name == "web_search":
+            return tool_input.get("query", "")
+        elif tool_name == "weather":
+            return tool_input.get("location", "")
         else:
             args = ", ".join(f"{k}={v!r}" for k, v in tool_input.items())
             return args[:150]
 
     def _build_openai_tool_messages(self, history: list[Message]) -> list[dict]:
-        """Build messages with tool use/results in OpenAI format."""
+        """Build messages with tool use/results in OpenAI format.
+
+        Assistant turns may carry `reasoning_content` in metadata when the
+        upstream is a thinking-mode model (DeepSeek-R1, Kimi reasoning, QwQ).
+        Those providers require the original reasoning_content to be
+        replayed verbatim in history — omitting it triggers a 400. For
+        non-thinking providers the field is simply absent, and the extra
+        key (when carried over from a mixed history) is ignored.
+        """
         messages = []
         for msg in history:
             if msg.role == MessageRole.ASSISTANT and "tool_calls" in msg.metadata:
@@ -325,6 +397,12 @@ class LLMAgent:
                 m: dict = {"role": "assistant", "tool_calls": tool_calls}
                 if msg.content:
                     m["content"] = msg.content
+                if msg.metadata.get("reasoning_content"):
+                    m["reasoning_content"] = msg.metadata["reasoning_content"]
+                messages.append(m)
+            elif msg.role == MessageRole.ASSISTANT and msg.metadata.get("reasoning_content"):
+                m = {"role": "assistant", "content": msg.content,
+                     "reasoning_content": msg.metadata["reasoning_content"]}
                 messages.append(m)
             elif msg.role == MessageRole.TOOL:
                 messages.append({

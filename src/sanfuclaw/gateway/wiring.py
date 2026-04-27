@@ -32,7 +32,9 @@ from sanfuclaw.tools.schedule import (
 )
 from sanfuclaw.tools.shell import ShellTool
 from sanfuclaw.tools.skill_loader import LoadSkillTool
+from sanfuclaw.tools.weather import WeatherTool
 from sanfuclaw.tools.web_fetch import WebFetchTool
+from sanfuclaw.tools.web_search import WebSearchTool
 
 
 logger = logging.getLogger(__name__)
@@ -62,6 +64,22 @@ Tool-use efficiency:
 - When independent operations are needed, emit MULTIPLE tool calls in the
   SAME round (parallel) rather than one per round (serial).
 - Prefer `find ... -exec cat {} +` or `head -n N f1 f2 f3` over many small reads.
+""".strip()
+
+
+WEB_RESEARCH_GUIDANCE = """
+Web research:
+- For time-sensitive content (today's news, current prices, recent
+  releases, latest docs), call `web_search` FIRST to discover real,
+  current URLs. Do not guess URLs from training-time memory — site
+  paths change, and stale URLs return 404s or wrong content.
+- After search, fetch a few of the top results in parallel with
+  `web_fetch`. If `web_fetch` returns an Error (interstitial, soft
+  404, JS-rendered shell), drop that source and try the next result
+  instead of retrying the same URL.
+- Prefer aggregator/RSS-friendly sources (Google News, Reuters,
+  TechCrunch, HN) over heavy SPAs (36kr, sina.com.cn) — the SPAs
+  often need a headless browser we don't have.
 """.strip()
 
 
@@ -125,7 +143,9 @@ async def build_router(
 
     tool_registry = ToolRegistry()
     tool_registry.register(ShellTool())
+    tool_registry.register(WebSearchTool())
     tool_registry.register(WebFetchTool())
+    tool_registry.register(WeatherTool())
     tool_registry.register(ScheduleCreateTool(store, default_timezone=settings.timezone))
     tool_registry.register(ScheduleListTool(store))
     tool_registry.register(ScheduleSetEnabledTool(store, default_timezone=settings.timezone))
@@ -162,7 +182,8 @@ async def build_router(
         system_prompt=(
             f"{settings.llm.system_prompt}\n\n"
             f"{SCHEDULE_PROMPT_GUIDANCE}\n\n"
-            f"{TOOL_EFFICIENCY_GUIDANCE}"
+            f"{TOOL_EFFICIENCY_GUIDANCE}\n\n"
+            f"{WEB_RESEARCH_GUIDANCE}"
             f"{memory_suffix}"
         ),
         model=settings.llm.model,
