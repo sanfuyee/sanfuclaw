@@ -35,6 +35,16 @@ from sanfuclaw.core.session import Session
 
 # --- DuckDuckGo HTML endpoint -------------------------------------------------
 
+_CJK_RE = re.compile(r"[一-鿿]")
+
+
+def _has_cjk(s: str) -> bool:
+    """True if the query contains any CJK character — used to nudge search
+    backends to a Chinese locale so they don't return ja/ko results that
+    happen to share digits like '2026'."""
+    return bool(_CJK_RE.search(s))
+
+
 _DDG_RESULT_RE = re.compile(
     r'<a[^>]*class="result__a"[^>]*href="([^"]+)"[^>]*>(.*?)</a>'
     r'.*?'
@@ -61,9 +71,15 @@ def _decode_ddg_url(href: str) -> str | None:
 async def _search_duckduckgo(
     client: AsyncSession, query: str, max_results: int, timeout: int, impersonate: str,
 ) -> list[tuple[str, str, str]]:
+    params = {"q": query}
+    if _has_cjk(query):
+        # cn-zh = "China region, Chinese language" — keeps zh-CN sites in
+        # results when query digits could match ja/ko pages (e.g. 2026 →
+        # 令和8年 calendars).
+        params["kl"] = "cn-zh"
     response = await client.get(
         "https://html.duckduckgo.com/html/",
-        params={"q": query},
+        params=params,
         timeout=timeout,
         impersonate=impersonate,
         allow_redirects=True,
@@ -123,9 +139,16 @@ def _decode_bing_url(href: str) -> str | None:
 async def _search_bing(
     client: AsyncSession, query: str, max_results: int, timeout: int, impersonate: str,
 ) -> list[tuple[str, str, str]]:
+    params = {"q": query}
+    if _has_cjk(query):
+        # mkt + setlang pin Bing to zh-CN; otherwise the user's outbound IP
+        # geo decides locale, and proxy routes from outside CN cause
+        # Japanese results for queries that share digits with ja calendars.
+        params["mkt"] = "zh-CN"
+        params["setlang"] = "zh-cn"
     response = await client.get(
         "https://www.bing.com/search",
-        params={"q": query},
+        params=params,
         timeout=timeout,
         impersonate=impersonate,
         allow_redirects=True,

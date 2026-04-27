@@ -63,36 +63,52 @@ class Router:
         # Send typing indicator
         await channel.send_typing(sid)
 
-        # Snapshot history length so we only persist messages added this turn.
+        # Snapshot history length so we only persist messages added this turn,
+        # and so we can roll back if the turn fails partway through.
         baseline = len(session.history)
 
-        # Stream response back to channel
-        full_response = ""
-        async for chunk in agent.process(envelope, session):
-            full_response += chunk
-            await channel.send(sid, chunk, streaming=True)
+        try:
+            # Stream response back to channel
+            full_response = ""
+            async for chunk in agent.process(envelope, session):
+                full_response += chunk
+                await channel.send(sid, chunk, streaming=True)
 
-        # Signal stream complete — flush buffered response
-        await channel.send(sid, full_response, done=True)
+            # Signal stream complete — flush buffered response
+            await channel.send(sid, full_response, done=True)
 
-        # Deliver the per-turn trace as a separate event, but only to channels
-        # that opt in (CLI). User-facing channels (WeChat/Telegram) skip it.
-        trace = getattr(agent, "last_trace", "")
-        if trace and getattr(channel, "wants_trace", False):
-            await channel.send(sid, trace, trace=True)
+            # Deliver the per-turn trace as a separate event, but only to
+            # channels that opt in (CLI). User-facing channels skip it.
+            trace = getattr(agent, "last_trace", "")
+            if trace and getattr(channel, "wants_trace", False):
+                await channel.send(sid, trace, trace=True)
 
-        # Persist session metadata + only the messages added during this turn.
-        await self._session_manager.update_session(session)
-        for msg in session.history[baseline:]:
-            if msg.session_id != session.id:
-                msg = Message(
-                    role=msg.role,
-                    content=msg.content,
-                    id=msg.id,
-                    channel_id=msg.channel_id,
-                    sender_id=msg.sender_id,
-                    metadata=msg.metadata,
-                    timestamp=msg.timestamp,
-                    session_id=session.id,
+            # Persist session metadata + only the messages added this turn.
+            await self._session_manager.update_session(session)
+            for msg in session.history[baseline:]:
+                if msg.session_id != session.id:
+                    msg = Message(
+                        role=msg.role,
+                        content=msg.content,
+                        id=msg.id,
+                        channel_id=msg.channel_id,
+                        sender_id=msg.sender_id,
+                        metadata=msg.metadata,
+                        timestamp=msg.timestamp,
+                        session_id=session.id,
+                    )
+                await self._session_manager.save_message(msg)
+        except Exception:
+            # Turn failed (LLM error, channel send error, persist error).
+            # The in-memory session may now have unsaved messages — roll back
+            # so DB and memory stay in sync. Otherwise the next turn's
+            # model would see phantom user messages from this failed attempt
+            # (e.g. "you asked X earlier" when X was never persisted).
+            dropped = len(session.history) - baseline
+            if dropped > 0:
+                logger.warning(
+                    "Turn failed for session=%s; rolling back %d unsaved in-memory message(s)",
+                    session.id[:8], dropped,
                 )
-            await self._session_manager.save_message(msg)
+                del session.history[baseline:]
+            raise
