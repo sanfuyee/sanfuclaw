@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import platform
+from datetime import date
 from typing import AsyncIterator
 
 from sanfuclaw.core.errors import ToolError
@@ -16,6 +19,19 @@ from sanfuclaw.skills.registry import SkillRegistry
 from sanfuclaw.tools.registry import ToolRegistry
 
 logger = logging.getLogger(__name__)
+
+
+def _build_env_block() -> str:
+    """Snapshot of the process's runtime environment, injected into the
+    system prompt so the agent knows where it lives. Captured once at
+    agent construction — pwd/platform/shell don't change mid-process."""
+    return (
+        "Process environment:\n"
+        f"- Working directory: {os.getcwd()}\n"
+        f"- User: {os.environ.get('USER', '(unknown)')}\n"
+        f"- Platform: {platform.system()} {platform.release()} ({platform.machine()})\n"
+        f"- Shell: {os.environ.get('SHELL', '(unknown)')}"
+    )
 
 
 class LLMAgent:
@@ -42,6 +58,7 @@ class LLMAgent:
         if skill_registry and len(skill_registry) > 0:
             system_prompt = system_prompt + "\n" + skill_registry.system_prompt_block()
         self._system_prompt = system_prompt
+        self._env_block = _build_env_block()
         self._model = model
         self._max_tokens = max_tokens
         self._context_window = context_window
@@ -125,6 +142,22 @@ class LLMAgent:
         )
         return history[i:]
 
+    def _system_prompt_for_now(self) -> str:
+        """System prompt with today's date and process environment prepended.
+
+        Without these the model has no idea what 'today' is or where shell
+        commands run — it falls back to training-cutoff facts and guesses
+        paths. The date piece is rebuilt per turn so a long-running process
+        picks up the new day after midnight; the env block is captured
+        once at __init__ since pwd/platform/shell don't change mid-run.
+        """
+        today = date.today()
+        return (
+            f"Today's date is {today.isoformat()} ({today.strftime('%A')}).\n\n"
+            f"{self._env_block}\n\n"
+            f"{self._system_prompt}"
+        )
+
     async def _stream_llm(
         self, messages: list[dict], tools: list[dict] | None,
     ) -> AsyncIterator[StreamChunk]:
@@ -135,7 +168,7 @@ class LLMAgent:
             model=self._model,
             max_tokens=self._max_tokens,
             temperature=self._temperature,
-            system=self._system_prompt,
+            system=self._system_prompt_for_now(),
         ):
             yield chunk
 
