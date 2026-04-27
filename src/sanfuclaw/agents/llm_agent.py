@@ -6,6 +6,7 @@ import json
 import logging
 from typing import AsyncIterator
 
+from sanfuclaw.core.errors import ToolError
 from sanfuclaw.core.message import Envelope, Message
 from sanfuclaw.core.session import Session
 from sanfuclaw.core.types import MessageRole, StreamChunkType
@@ -239,9 +240,15 @@ class LLMAgent:
                 try:
                     result = await self._tools.execute(tc.tool_name, tc.tool_input, session)
                     result_str = result if isinstance(result, str) else json.dumps(result)
+                except ToolError as e:
+                    # Controlled failure — the LLM is meant to read the message
+                    # and recover (try a different source / give up gracefully).
+                    # No traceback: it's not a bug, just a tool-level outcome.
+                    result_str = f"Error: {e}"
+                    logger.warning("Tool %s failed: %s", tc.tool_name, e)
                 except Exception as e:
                     result_str = f"Error: {e}"
-                    logger.exception("Tool %s raised during execute()", tc.tool_name)
+                    logger.exception("Tool %s raised unexpectedly", tc.tool_name)
 
                 session.add_message(Message(
                     role=MessageRole.TOOL,

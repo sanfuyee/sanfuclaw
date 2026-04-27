@@ -33,6 +33,12 @@ _INTERSTITIAL_PHRASES = re.compile(
     r"please wait|just a moment|checking your browser|enable javascript and cookies",
     re.IGNORECASE,
 )
+_TITLE_TAG = re.compile(r"<title[^>]*>\s*([^<]{0,200})", re.IGNORECASE)
+_SOFT_404_TITLE = re.compile(
+    r"\b404\b|page not found|not\s*found|"
+    r"页面不存在|页面.{0,4}找不到|找不到了|页面.{0,4}已删除",
+    re.IGNORECASE,
+)
 
 
 def _html_to_text(html: str) -> str:
@@ -62,6 +68,21 @@ def _detect_interstitial(html: str, text: str) -> str | None:
     # Suspiciously short body that's almost entirely a "please wait" stub.
     if len(text) < 500 and _INTERSTITIAL_PHRASES.search(text):
         return "page body is a short 'please wait' stub"
+    return None
+
+
+def _detect_soft_404(html: str) -> str | None:
+    """Return a brief reason if the page is a 'soft 404' — HTTP 200 served
+    with a not-found page (common on news.qq.com, sina, weibo, etc.).
+    We only match in <title> to avoid false positives where '404' or
+    'not found' appears in legitimate article text.
+    """
+    m = _TITLE_TAG.search(html)
+    if not m:
+        return None
+    title = m.group(1).strip()
+    if _SOFT_404_TITLE.search(title):
+        return f"page title indicates a not-found page: {title[:80]!r}"
     return None
 
 
@@ -110,6 +131,13 @@ class WebFetchTool:
                     allow_redirects=True,
                     verify=False,  # Allow local proxy (e.g. clash) to handle SSL
                 )
+                status = response.status_code
+                if not 200 <= status < 300:
+                    raise ToolError(
+                        f"HTTP {status} from {url}; the URL is unreachable, "
+                        "wrong, or the resource no longer exists."
+                    )
+
                 body = response.text
                 content_type = response.headers.get("content-type", "")
 
@@ -122,6 +150,23 @@ class WebFetchTool:
                             f"interstitial ({reason}); the real page requires "
                             "a headless browser to render. Try a different "
                             "source or summary feed."
+                        )
+                    soft_404 = _detect_soft_404(body)
+                    if soft_404:
+                        raise ToolError(
+                            f"URL returned a soft 404 ({soft_404}); the page "
+                            "does not exist or has moved. Try a different URL."
+                        )
+                    # JS-rendered shell: substantial HTML payload but almost
+                    # nothing readable after stripping <script> blocks. The
+                    # real content lives in JS-built DOM that we can't reach.
+                    if len(text) < 50 and len(body) > 2000 and "<script" in body.lower():
+                        raise ToolError(
+                            f"URL appears to be a JavaScript-rendered shell "
+                            f"(only {len(text)} chars of text extracted from "
+                            f"{len(body)} bytes of HTML). The real content is "
+                            "built by client-side JS. Try the site's RSS feed, "
+                            "API, or a different source."
                         )
                     if not raw:
                         body = text
