@@ -82,6 +82,13 @@ class OpenAICompatTransport:
                     raise
 
         tool_calls_accumulator: dict[int, dict] = {}
+        # Tracks tool_call_ids already emitted across the *entire* stream,
+        # not just within a single finish_reason block. DeepSeek has been
+        # observed emitting `finish_reason="tool_calls"` twice in one stream
+        # with the same accumulated calls — without a stream-wide guard the
+        # second emission would replay the same tool calls and the agent
+        # would execute each tool twice.
+        emitted_tool_call_ids: set[str] = set()
         reasoning_chunk_count = 0  # fallback if usage doesn't report reasoning_tokens
 
         last_usage = None
@@ -137,16 +144,14 @@ class OpenAICompatTransport:
             if chunk.choices[0].finish_reason == "stop":
                 yield StreamChunk(type=StreamChunkType.STOP)
             elif chunk.choices[0].finish_reason == "tool_calls":
-                # Emit accumulated tool calls, deduped by id.
-                # DeepSeek (and possibly other OpenAI-compatible providers)
-                # has been observed emitting the same tool_call twice with
-                # different `index` values but identical `id` and arguments.
-                # Persisting both would crash the next turn — DeepSeek itself
-                # rejects messages arrays with duplicate tool_call_id (400).
-                seen_ids: set[str] = set()
+                # Emit accumulated tool calls, deduped by id across the
+                # whole stream. DeepSeek can fire finish_reason="tool_calls"
+                # twice in one stream (with the same accumulator content),
+                # so we use the stream-wide `emitted_tool_call_ids` rather
+                # than a fresh per-finish set.
                 for tc_data in tool_calls_accumulator.values():
                     tc_id = tc_data["id"]
-                    if tc_id and tc_id in seen_ids:
+                    if tc_id and tc_id in emitted_tool_call_ids:
                         logger.warning(
                             "Dropping duplicate tool_call from upstream stream: "
                             "id=%s name=%s",
@@ -154,7 +159,7 @@ class OpenAICompatTransport:
                         )
                         continue
                     if tc_id:
-                        seen_ids.add(tc_id)
+                        emitted_tool_call_ids.add(tc_id)
                     try:
                         tool_input = json.loads(tc_data["arguments"]) if tc_data["arguments"] else {}
                     except json.JSONDecodeError:
@@ -165,6 +170,11 @@ class OpenAICompatTransport:
                         tool_call_id=tc_id,
                         tool_input=tool_input,
                     )
+                # Reset accumulator after emission. If the upstream
+                # continues to send more deltas (DeepSeek's double-emit
+                # case), we want them to start fresh entries, not append
+                # onto already-emitted state and corrupt arguments JSON.
+                tool_calls_accumulator = {}
                 yield StreamChunk(type=StreamChunkType.STOP)
 
         # Emit final usage after stream ends.
