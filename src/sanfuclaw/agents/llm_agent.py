@@ -17,6 +17,7 @@ from sanfuclaw.core.types import MessageRole, StreamChunkType
 from .transports.base import LLMTransport, StreamChunk
 from sanfuclaw.skills.registry import SkillRegistry
 from sanfuclaw.tools.registry import ToolRegistry
+from sanfuclaw.tools.task import format_plan
 
 logger = logging.getLogger(__name__)
 
@@ -159,16 +160,29 @@ class LLMAgent:
         )
 
     async def _stream_llm(
-        self, messages: list[dict], tools: list[dict] | None,
+        self,
+        messages: list[dict],
+        tools: list[dict] | None,
+        session: Session | None = None,
     ) -> AsyncIterator[StreamChunk]:
-        """Thin wrapper around transport.complete."""
+        """Thin wrapper around transport.complete.
+
+        If the session has a non-empty plan in metadata, append it to the
+        system prompt so the model sees current progress every turn
+        without scrolling history.
+        """
+        system = self._system_prompt_for_now()
+        plan = session.metadata.get("plan") if session else None
+        if plan:
+            system = f"{system}\n\nCurrent plan:\n{format_plan(plan)}"
+
         async for chunk in self._transport.complete(
             messages=messages,
             tools=tools,
             model=self._model,
             max_tokens=self._max_tokens,
             temperature=self._temperature,
-            system=self._system_prompt_for_now(),
+            system=system,
         ):
             yield chunk
 
@@ -204,7 +218,7 @@ class LLMAgent:
             step_cached = 0
             step_reasoning = 0
 
-            async for chunk in self._stream_llm(messages, tools):
+            async for chunk in self._stream_llm(messages, tools, session):
                 if chunk.type == StreamChunkType.TEXT_DELTA:
                     full_response += chunk.data
                     yield chunk.data
@@ -367,6 +381,9 @@ class LLMAgent:
             return tool_input.get("query", "")
         elif tool_name == "weather":
             return tool_input.get("location", "")
+        elif tool_name == "task_write":
+            tasks = tool_input.get("tasks") or []
+            return f"{len(tasks)} tasks"
         else:
             args = ", ".join(f"{k}={v!r}" for k, v in tool_input.items())
             return args[:150]

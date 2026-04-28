@@ -32,6 +32,7 @@ from sanfuclaw.tools.schedule import (
 )
 from sanfuclaw.tools.shell import ShellTool
 from sanfuclaw.tools.skill_loader import LoadSkillTool
+from sanfuclaw.tools.task import TaskWriteTool
 from sanfuclaw.tools.weather import WeatherTool
 from sanfuclaw.tools.web_fetch import WebFetchTool
 from sanfuclaw.tools.web_search import WebSearchTool
@@ -64,6 +65,28 @@ Tool-use efficiency:
 - When independent operations are needed, emit MULTIPLE tool calls in the
   SAME round (parallel) rather than one per round (serial).
 - Prefer `find ... -exec cat {} +` or `head -n N f1 f2 f3` over many small reads.
+""".strip()
+
+
+PLANNING_GUIDANCE = """
+Planning behavior:
+- For multi-step tasks (3+ distinct steps, multiple tools/sources, or
+  anything where a step might fail and force replanning), call
+  `task_write` FIRST with a numbered plan. Mark exactly one task as
+  'in_progress' and the rest as 'pending'.
+- After each meaningful step (a tool call resolves an item, a research
+  finding answers a sub-question), call `task_write` again with the
+  full updated state: the just-finished task moves to 'completed' with
+  a one-line `note` capturing what you learned, and the next task
+  becomes 'in_progress'.
+- When a tool returns an Error or observation contradicts the plan,
+  REPLAN — call `task_write` to drop dead steps, add new ones, or
+  reorder. Don't silently abandon the plan and improvise.
+- The current plan is appended to your system prompt every turn. Trust
+  it as the live source of truth — execute and revise it, don't
+  re-derive it from history.
+- Skip planning entirely for one-shot questions ('what's the weather',
+  'show me the file X'). Planning overhead is worse than no plan.
 """.strip()
 
 
@@ -146,6 +169,7 @@ async def build_router(
     tool_registry.register(WebSearchTool())
     tool_registry.register(WebFetchTool())
     tool_registry.register(WeatherTool())
+    tool_registry.register(TaskWriteTool())
     tool_registry.register(ScheduleCreateTool(store, default_timezone=settings.timezone))
     tool_registry.register(ScheduleListTool(store))
     tool_registry.register(ScheduleSetEnabledTool(store, default_timezone=settings.timezone))
@@ -183,6 +207,7 @@ async def build_router(
             f"{settings.llm.system_prompt}\n\n"
             f"{SCHEDULE_PROMPT_GUIDANCE}\n\n"
             f"{TOOL_EFFICIENCY_GUIDANCE}\n\n"
+            f"{PLANNING_GUIDANCE}\n\n"
             f"{WEB_RESEARCH_GUIDANCE}"
             f"{memory_suffix}"
         ),
