@@ -137,8 +137,24 @@ class OpenAICompatTransport:
             if chunk.choices[0].finish_reason == "stop":
                 yield StreamChunk(type=StreamChunkType.STOP)
             elif chunk.choices[0].finish_reason == "tool_calls":
-                # Emit accumulated tool calls
+                # Emit accumulated tool calls, deduped by id.
+                # DeepSeek (and possibly other OpenAI-compatible providers)
+                # has been observed emitting the same tool_call twice with
+                # different `index` values but identical `id` and arguments.
+                # Persisting both would crash the next turn — DeepSeek itself
+                # rejects messages arrays with duplicate tool_call_id (400).
+                seen_ids: set[str] = set()
                 for tc_data in tool_calls_accumulator.values():
+                    tc_id = tc_data["id"]
+                    if tc_id and tc_id in seen_ids:
+                        logger.warning(
+                            "Dropping duplicate tool_call from upstream stream: "
+                            "id=%s name=%s",
+                            tc_id, tc_data["name"],
+                        )
+                        continue
+                    if tc_id:
+                        seen_ids.add(tc_id)
                     try:
                         tool_input = json.loads(tc_data["arguments"]) if tc_data["arguments"] else {}
                     except json.JSONDecodeError:
@@ -146,7 +162,7 @@ class OpenAICompatTransport:
                     yield StreamChunk(
                         type=StreamChunkType.TOOL_USE,
                         tool_name=tc_data["name"],
-                        tool_call_id=tc_data["id"],
+                        tool_call_id=tc_id,
                         tool_input=tool_input,
                     )
                 yield StreamChunk(type=StreamChunkType.STOP)

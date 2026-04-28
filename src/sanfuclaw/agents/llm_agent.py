@@ -342,27 +342,52 @@ class LLMAgent:
         )
 
     def _build_anthropic_tool_messages(self, history: list[Message]) -> list[dict]:
-        """Build messages with tool use/results in Anthropic format."""
+        """Build messages with tool use/results in Anthropic format.
+
+        Defends against histories polluted by upstream providers that
+        emitted the same tool_call_id twice (observed on DeepSeek): every
+        tool_use must have a unique id, and every tool_result must
+        reference an id that was actually called and hasn't been answered
+        yet. Otherwise the API rejects the request with 400.
+        """
         messages = []
+        called_ids: set[str] = set()      # tool_use ids we've emitted
+        resulted_ids: set[str] = set()    # tool_result ids we've emitted
         for msg in history:
             if msg.role == MessageRole.ASSISTANT and "tool_calls" in msg.metadata:
                 content = []
                 if msg.content:
                     content.append({"type": "text", "text": msg.content})
                 for tc in msg.metadata["tool_calls"]:
+                    if tc["id"] in called_ids:
+                        logger.warning(
+                            "Skipping duplicate tool_call id=%s name=%s in history",
+                            tc["id"], tc["name"],
+                        )
+                        continue
+                    called_ids.add(tc["id"])
                     content.append({
                         "type": "tool_use",
                         "id": tc["id"],
                         "name": tc["name"],
                         "input": tc["input"],
                     })
-                messages.append({"role": "assistant", "content": content})
+                if content:
+                    messages.append({"role": "assistant", "content": content})
             elif msg.role == MessageRole.TOOL:
+                tcid = msg.metadata.get("tool_call_id", "")
+                if not tcid or tcid in resulted_ids:
+                    if tcid:
+                        logger.warning(
+                            "Skipping duplicate tool_result id=%s in history", tcid,
+                        )
+                    continue
+                resulted_ids.add(tcid)
                 messages.append({
                     "role": "user",
                     "content": [{
                         "type": "tool_result",
-                        "tool_use_id": msg.metadata.get("tool_call_id", ""),
+                        "tool_use_id": tcid,
                         "content": msg.content,
                     }],
                 })
@@ -399,10 +424,19 @@ class LLMAgent:
         key (when carried over from a mixed history) is ignored.
         """
         messages = []
+        called_ids: set[str] = set()
+        resulted_ids: set[str] = set()
         for msg in history:
             if msg.role == MessageRole.ASSISTANT and "tool_calls" in msg.metadata:
                 tool_calls = []
                 for tc in msg.metadata["tool_calls"]:
+                    if tc["id"] in called_ids:
+                        logger.warning(
+                            "Skipping duplicate tool_call id=%s name=%s in history",
+                            tc["id"], tc["name"],
+                        )
+                        continue
+                    called_ids.add(tc["id"])
                     tool_calls.append({
                         "id": tc["id"],
                         "type": "function",
@@ -411,7 +445,15 @@ class LLMAgent:
                             "arguments": json.dumps(tc["input"]),
                         },
                     })
-                m: dict = {"role": "assistant", "tool_calls": tool_calls}
+                # If every tool_call was a duplicate we'd send an assistant
+                # turn with empty tool_calls — OpenAI providers reject that.
+                # Skip the message entirely unless there's text or at least
+                # one surviving tool_call.
+                if not tool_calls and not msg.content:
+                    continue
+                m: dict = {"role": "assistant"}
+                if tool_calls:
+                    m["tool_calls"] = tool_calls
                 if msg.content:
                     m["content"] = msg.content
                 if msg.metadata.get("reasoning_content"):
@@ -422,9 +464,17 @@ class LLMAgent:
                      "reasoning_content": msg.metadata["reasoning_content"]}
                 messages.append(m)
             elif msg.role == MessageRole.TOOL:
+                tcid = msg.metadata.get("tool_call_id", "")
+                if not tcid or tcid in resulted_ids:
+                    if tcid:
+                        logger.warning(
+                            "Skipping duplicate tool_result id=%s in history", tcid,
+                        )
+                    continue
+                resulted_ids.add(tcid)
                 messages.append({
                     "role": "tool",
-                    "tool_call_id": msg.metadata.get("tool_call_id", ""),
+                    "tool_call_id": tcid,
                     "content": msg.content,
                 })
             else:
