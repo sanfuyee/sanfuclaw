@@ -23,6 +23,11 @@ from sanfuclaw.memory.registry import MemoryRegistry
 from sanfuclaw.skills.registry import SkillRegistry
 from sanfuclaw.storage.base import Store
 from sanfuclaw.tools.memory_loader import LoadMemoryTool
+from sanfuclaw.tools.memory_writer import (
+    ForgetMemoryTool,
+    SaveMemoryTool,
+    UpdateMemoryTool,
+)
 from sanfuclaw.tools.registry import ToolRegistry
 from sanfuclaw.tools.schedule import (
     ScheduleCreateTool,
@@ -178,6 +183,11 @@ async def build_router(
         tool_registry.register(LoadSkillTool(skill_registry))
     if len(memory_registry) > 0 or memory_registry.system_prompt_block():
         tool_registry.register(LoadMemoryTool(memory_registry))
+    # Write tools registered unconditionally — the LLM can create the first
+    # entry into an empty memory dir, which is exactly when curating helps most.
+    tool_registry.register(SaveMemoryTool(memory_registry))
+    tool_registry.register(UpdateMemoryTool(memory_registry))
+    tool_registry.register(ForgetMemoryTool(memory_registry))
 
     mcp_manager = MCPManager(settings.mcp.servers)
     await mcp_manager.start()
