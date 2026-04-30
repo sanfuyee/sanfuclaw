@@ -14,9 +14,12 @@ from sanfuclaw.core.message import Envelope, Message
 from sanfuclaw.core.session import Session
 from sanfuclaw.core.types import MessageRole, StreamChunkType
 
+from .history_budget import HistoryBudget
+from .message_formatter import MessageFormatter, for_format
 from .transports.base import LLMTransport, StreamChunk
 from sanfuclaw.skills.registry import SkillRegistry
 from sanfuclaw.tools.registry import ToolRegistry
+from sanfuclaw.tools.task import format_plan
 
 logger = logging.getLogger(__name__)
 
@@ -65,82 +68,56 @@ class LLMAgent:
         self._max_tool_rounds = max_tool_rounds
         self._temperature = temperature
         self._input_safety_margin = input_safety_margin
+
+        # Provider-specific message formatter selected once at construction —
+        # the transport never changes shape mid-process.
+        fmt = getattr(transport, "message_format", "anthropic")
+        self._formatter: MessageFormatter = for_format(fmt)
+
         # Per-turn diagnostic info (LLM steps, token usage). Populated each
         # process() call. The router decides whether to surface this — only
         # interactive channels (CLI) want it; user-facing channels skip it.
+        # NOTE: this is a single-slot field; concurrent process() calls on the
+        # same agent would race here. The router serializes per-envelope today.
         self.last_trace: str = ""
 
     def _build_messages(self, session: Session) -> list[dict]:
-        """Build messages in the correct format for the current transport."""
-        recent = self._fit_history_to_budget(session.history)
+        """Build messages in the format expected by the current transport."""
+        budget = self._budget_for_current_call()
+        recent = budget.fit(session.history)
+        return self._formatter.build(recent)
 
-        fmt = getattr(self._transport, "message_format", "anthropic")
-        if fmt == "openai":
-            return self._build_openai_tool_messages(recent)
-        else:
-            return self._build_anthropic_tool_messages(recent)
-
-    @staticmethod
-    def _estimate_tokens(text: str) -> int:
-        # 3 chars/token: overestimates pure English (~4 chars/tok), about
-        # right for mixed CJK (~1.5 chars/tok). Overestimating is safe —
-        # it just trims slightly more aggressively.
-        return max(1, len(text) // 3)
-
-    def _estimate_message_tokens(self, msg: Message) -> int:
-        total = self._estimate_tokens(msg.content or "")
-        if "tool_calls" in msg.metadata:
-            total += self._estimate_tokens(json.dumps(msg.metadata["tool_calls"]))
-        return total + 4  # small per-message structural overhead
-
-    def _fit_history_to_budget(self, history: list[Message]) -> list[Message]:
-        """Drop oldest messages until estimated tokens fit the input budget.
-
-        Preserves tool_use/tool_result pairs: an orphaned tool_result is
-        rejected by both Anthropic and OpenAI, so if an assistant message
-        with tool_calls is dropped, its trailing TOOL messages go too.
-        """
-        if not self._context_window:
-            return history
-
-        fixed = self._estimate_tokens(self._system_prompt)
+    def _budget_for_current_call(self) -> HistoryBudget:
+        """Compute the trim budget. Tool schemas can change at runtime (MCP
+        servers reconnect, lazy-loaded skill registers a new tool), so we
+        recompute the fixed overhead on each call."""
         try:
             schemas = self._tools.to_llm_schemas() or []
-            if schemas:
-                fixed += self._estimate_tokens(json.dumps(schemas))
         except Exception:
-            logger.debug("Could not estimate tool schema tokens", exc_info=True)
-        fixed += self._max_tokens + self._input_safety_margin
-
-        budget = self._context_window - fixed
-        if budget <= 0:
-            logger.warning(
-                "Input budget exhausted by fixed overhead "
-                "(context_window=%d, max_tokens=%d, margin=%d). Sending empty history.",
-                self._context_window, self._max_tokens, self._input_safety_margin,
-            )
-            return []
-
-        sizes = [self._estimate_message_tokens(m) for m in history]
-        total = sum(sizes)
-        if total <= budget:
-            return history
-
-        i = 0
-        n = len(history)
-        while total > budget and i < n:
-            total -= sizes[i]
-            i += 1
-            # A leading TOOL message would be an orphaned tool_result — drop it.
-            while i < n and history[i].role == MessageRole.TOOL:
-                total -= sizes[i]
-                i += 1
-
-        logger.info(
-            "Trimmed %d/%d history messages to fit input budget (%d tokens est.)",
-            i, n, budget,
+            logger.debug("Could not enumerate tool schemas", exc_info=True)
+            schemas = []
+        return HistoryBudget.from_components(
+            context_window=self._context_window,
+            max_tokens=self._max_tokens,
+            input_safety_margin=self._input_safety_margin,
+            system_prompt=self._system_prompt,
+            tool_schemas=schemas,
         )
-        return history[i:]
+
+    # --- back-compat shims for tests / external callers --------------------
+
+    def _fit_history_to_budget(self, history: list[Message]) -> list[Message]:
+        return self._budget_for_current_call().fit(history)
+
+    def _build_anthropic_tool_messages(self, history: list[Message]) -> list[dict]:
+        from .message_formatter import AnthropicMessageFormatter
+        return AnthropicMessageFormatter().build(history)
+
+    def _build_openai_tool_messages(self, history: list[Message]) -> list[dict]:
+        from .message_formatter import OpenAIMessageFormatter
+        return OpenAIMessageFormatter().build(history)
+
+    # ------------------------------------------------------------------------
 
     def _system_prompt_for_now(self) -> str:
         """System prompt with today's date and process environment prepended.
@@ -159,16 +136,29 @@ class LLMAgent:
         )
 
     async def _stream_llm(
-        self, messages: list[dict], tools: list[dict] | None,
+        self,
+        messages: list[dict],
+        tools: list[dict] | None,
+        session: Session | None = None,
     ) -> AsyncIterator[StreamChunk]:
-        """Thin wrapper around transport.complete."""
+        """Thin wrapper around transport.complete.
+
+        If the session has a non-empty plan in metadata, append it to the
+        system prompt so the model sees current progress every turn
+        without scrolling history.
+        """
+        system = self._system_prompt_for_now()
+        plan = session.metadata.get("plan") if session else None
+        if plan:
+            system = f"{system}\n\nCurrent plan:\n{format_plan(plan)}"
+
         async for chunk in self._transport.complete(
             messages=messages,
             tools=tools,
             model=self._model,
             max_tokens=self._max_tokens,
             temperature=self._temperature,
-            system=self._system_prompt_for_now(),
+            system=system,
         ):
             yield chunk
 
@@ -177,10 +167,19 @@ class LLMAgent:
         session.add_message(envelope.message)
         tools = self._tools.to_llm_schemas() or None
 
+        # Short turn id — surfaces in every per-turn log line so JSON-mode log
+        # consumers can correlate "Turn start", tool calls, and "Turn done" for
+        # one envelope without parsing message text.
+        turn_id = envelope.message.id[:8]
+        log_ctx = {"session_id": session.id[:8], "turn_id": turn_id}
+
         logger.info(
             "Turn start: session=%s channel=%s history=%d msgs tools=%d",
             session.id[:8], envelope.source_channel, len(session.history),
             len(tools) if tools else 0,
+            extra={**log_ctx, "channel": envelope.source_channel,
+                   "history_len": len(session.history),
+                   "tool_count": len(tools) if tools else 0},
         )
 
         total_input_tokens = 0
@@ -204,7 +203,7 @@ class LLMAgent:
             step_cached = 0
             step_reasoning = 0
 
-            async for chunk in self._stream_llm(messages, tools):
+            async for chunk in self._stream_llm(messages, tools, session):
                 if chunk.type == StreamChunkType.TEXT_DELTA:
                     full_response += chunk.data
                     yield chunk.data
@@ -268,7 +267,10 @@ class LLMAgent:
             for tc in tool_calls:
                 input_summary = self._summarize_tool_input(tc.tool_name, tc.tool_input)
                 trace.append(f"Tool `{tc.tool_name}`: {input_summary}")
-                logger.debug("Tool call: %s(%s)", tc.tool_name, input_summary)
+                tool_ctx = {**log_ctx, "tool": tc.tool_name, "round": round_num}
+                logger.debug(
+                    "Tool call: %s(%s)", tc.tool_name, input_summary, extra=tool_ctx,
+                )
 
                 try:
                     result = await self._tools.execute(tc.tool_name, tc.tool_input, session)
@@ -278,10 +280,10 @@ class LLMAgent:
                     # and recover (try a different source / give up gracefully).
                     # No traceback: it's not a bug, just a tool-level outcome.
                     result_str = f"Error: {e}"
-                    logger.warning("Tool %s failed: %s", tc.tool_name, e)
+                    logger.warning("Tool %s failed: %s", tc.tool_name, e, extra=tool_ctx)
                 except Exception as e:
                     result_str = f"Error: {e}"
-                    logger.exception("Tool %s raised unexpectedly", tc.tool_name)
+                    logger.exception("Tool %s raised unexpectedly", tc.tool_name, extra=tool_ctx)
 
                 session.add_message(Message(
                     role=MessageRole.TOOL,
@@ -325,36 +327,16 @@ class LLMAgent:
             total_input_tokens, total_output_tokens,
             f" cached={total_cached_tokens}" if total_cached_tokens else "",
             " (max rounds reached)" if exhausted else "",
+            extra={
+                **log_ctx,
+                "tool_rounds": tool_round_count,
+                "input_tokens": total_input_tokens,
+                "output_tokens": total_output_tokens,
+                "cached_tokens": total_cached_tokens,
+                "reasoning_tokens": total_reasoning_tokens,
+                "exhausted": exhausted,
+            },
         )
-
-    def _build_anthropic_tool_messages(self, history: list[Message]) -> list[dict]:
-        """Build messages with tool use/results in Anthropic format."""
-        messages = []
-        for msg in history:
-            if msg.role == MessageRole.ASSISTANT and "tool_calls" in msg.metadata:
-                content = []
-                if msg.content:
-                    content.append({"type": "text", "text": msg.content})
-                for tc in msg.metadata["tool_calls"]:
-                    content.append({
-                        "type": "tool_use",
-                        "id": tc["id"],
-                        "name": tc["name"],
-                        "input": tc["input"],
-                    })
-                messages.append({"role": "assistant", "content": content})
-            elif msg.role == MessageRole.TOOL:
-                messages.append({
-                    "role": "user",
-                    "content": [{
-                        "type": "tool_result",
-                        "tool_use_id": msg.metadata.get("tool_call_id", ""),
-                        "content": msg.content,
-                    }],
-                })
-            else:
-                messages.append(msg.to_llm_dict())
-        return messages
 
     @staticmethod
     def _summarize_tool_input(tool_name: str, tool_input: dict) -> str:
@@ -367,49 +349,9 @@ class LLMAgent:
             return tool_input.get("query", "")
         elif tool_name == "weather":
             return tool_input.get("location", "")
+        elif tool_name == "task_write":
+            tasks = tool_input.get("tasks") or []
+            return f"{len(tasks)} tasks"
         else:
             args = ", ".join(f"{k}={v!r}" for k, v in tool_input.items())
             return args[:150]
-
-    def _build_openai_tool_messages(self, history: list[Message]) -> list[dict]:
-        """Build messages with tool use/results in OpenAI format.
-
-        Assistant turns may carry `reasoning_content` in metadata when the
-        upstream is a thinking-mode model (DeepSeek-R1, Kimi reasoning, QwQ).
-        Those providers require the original reasoning_content to be
-        replayed verbatim in history — omitting it triggers a 400. For
-        non-thinking providers the field is simply absent, and the extra
-        key (when carried over from a mixed history) is ignored.
-        """
-        messages = []
-        for msg in history:
-            if msg.role == MessageRole.ASSISTANT and "tool_calls" in msg.metadata:
-                tool_calls = []
-                for tc in msg.metadata["tool_calls"]:
-                    tool_calls.append({
-                        "id": tc["id"],
-                        "type": "function",
-                        "function": {
-                            "name": tc["name"],
-                            "arguments": json.dumps(tc["input"]),
-                        },
-                    })
-                m: dict = {"role": "assistant", "tool_calls": tool_calls}
-                if msg.content:
-                    m["content"] = msg.content
-                if msg.metadata.get("reasoning_content"):
-                    m["reasoning_content"] = msg.metadata["reasoning_content"]
-                messages.append(m)
-            elif msg.role == MessageRole.ASSISTANT and msg.metadata.get("reasoning_content"):
-                m = {"role": "assistant", "content": msg.content,
-                     "reasoning_content": msg.metadata["reasoning_content"]}
-                messages.append(m)
-            elif msg.role == MessageRole.TOOL:
-                messages.append({
-                    "role": "tool",
-                    "tool_call_id": msg.metadata.get("tool_call_id", ""),
-                    "content": msg.content,
-                })
-            else:
-                messages.append(msg.to_llm_dict())
-        return messages

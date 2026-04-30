@@ -30,6 +30,10 @@ class SQLiteStore:
         self._db = await aiosqlite.connect(self._db_path)
         await self._db.execute("PRAGMA journal_mode=WAL")
         await self._db.execute("PRAGMA foreign_keys=ON")
+        # Wait up to 5s for a competing writer (e.g. `sanfuclaw cron add` while
+        # the daemon is running) instead of failing immediately with
+        # "database is locked".
+        await self._db.execute("PRAGMA busy_timeout=5000")
         await self._run_migrations()
 
     async def close(self) -> None:

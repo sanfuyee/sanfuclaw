@@ -13,6 +13,17 @@ from pydantic_settings import BaseSettings
 from sanfuclaw.core import paths
 
 
+SUPPORTED_PROVIDERS = ("openai_compat", "anthropic")
+
+
+class LLMConfigError(ValueError):
+    """Raised when llm.* settings are missing or out of range.
+
+    Subclasses `ValueError` so callers that already catch generic config
+    failures keep working; the CLI catches this explicitly to print a
+    user-friendly hint instead of a traceback."""
+
+
 class LLMConfig(BaseSettings):
     provider: str = "openai_compat"
     model: str = "zai-org/glm-5.1"
@@ -26,6 +37,63 @@ class LLMConfig(BaseSettings):
         "You are a helpful personal AI assistant called Sanfuclaw. "
         "You are running locally on the user's machine. Be concise and helpful."
     )
+
+    def resolved_api_key(self) -> str:
+        """Return api_key from config, falling back to env vars in order:
+        ANTHROPIC_API_KEY (only when provider=anthropic), then LLM_API_KEY."""
+        import os
+
+        if self.api_key:
+            return self.api_key
+        if self.provider == "anthropic":
+            env_key = os.environ.get("ANTHROPIC_API_KEY", "")
+            if env_key:
+                return env_key
+        return os.environ.get("LLM_API_KEY", "")
+
+    def validate_startup(self) -> None:
+        """Validate the model-related settings at process boot.
+
+        Raises `LLMConfigError` with a single human-readable message — the
+        CLI surfaces it as a user-facing error before any heavy startup
+        work (DB init, MCP spawn, channel auth) happens."""
+        problems: list[str] = []
+
+        if self.provider not in SUPPORTED_PROVIDERS:
+            problems.append(
+                f"llm.provider={self.provider!r} is not supported "
+                f"(expected one of: {', '.join(SUPPORTED_PROVIDERS)})"
+            )
+        if not self.model.strip():
+            problems.append("llm.model is empty — set it in config.json or with --model")
+        if self.provider == "openai_compat" and not self.base_url.strip():
+            problems.append(
+                "llm.base_url is empty — required for provider=openai_compat "
+                "(e.g. https://api.openai.com/v1)"
+            )
+        if not self.resolved_api_key():
+            hint = "ANTHROPIC_API_KEY or LLM_API_KEY" if self.provider == "anthropic" else "LLM_API_KEY"
+            problems.append(
+                f"llm.api_key is empty and no {hint} env var is set"
+            )
+        if self.max_tokens <= 0:
+            problems.append(f"llm.max_tokens must be > 0 (got {self.max_tokens})")
+        if self.context_window <= 0:
+            problems.append(f"llm.context_window must be > 0 (got {self.context_window})")
+        if self.max_tool_rounds <= 0:
+            problems.append(f"llm.max_tool_rounds must be > 0 (got {self.max_tool_rounds})")
+        if not (0.0 <= self.temperature <= 2.0):
+            problems.append(
+                f"llm.temperature must be in [0.0, 2.0] (got {self.temperature})"
+            )
+        if self.max_tokens > self.context_window:
+            problems.append(
+                f"llm.max_tokens ({self.max_tokens}) exceeds llm.context_window "
+                f"({self.context_window}) — the model has no room for input"
+            )
+
+        if problems:
+            raise LLMConfigError("\n  - ".join(["Invalid LLM configuration:"] + problems))
 
 
 class GatewayConfig(BaseSettings):

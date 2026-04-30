@@ -8,12 +8,11 @@ drifting apart when the agent or tool wiring changes.
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 
 from sanfuclaw.agents.llm_agent import LLMAgent
 from sanfuclaw.agents.transports.base import LLMTransport
-from sanfuclaw.core.config import Settings
+from sanfuclaw.core.config import LLMConfigError, Settings
 from sanfuclaw.gateway.router import Router
 from sanfuclaw.gateway.scheduler import Scheduler
 from sanfuclaw.gateway.session_manager import SessionManager
@@ -23,6 +22,11 @@ from sanfuclaw.memory.registry import MemoryRegistry
 from sanfuclaw.skills.registry import SkillRegistry
 from sanfuclaw.storage.base import Store
 from sanfuclaw.tools.memory_loader import LoadMemoryTool
+from sanfuclaw.tools.memory_writer import (
+    ForgetMemoryTool,
+    SaveMemoryTool,
+    UpdateMemoryTool,
+)
 from sanfuclaw.tools.registry import ToolRegistry
 from sanfuclaw.tools.schedule import (
     ScheduleCreateTool,
@@ -32,6 +36,7 @@ from sanfuclaw.tools.schedule import (
 )
 from sanfuclaw.tools.shell import ShellTool
 from sanfuclaw.tools.skill_loader import LoadSkillTool
+from sanfuclaw.tools.task import TaskWriteTool
 from sanfuclaw.tools.weather import WeatherTool
 from sanfuclaw.tools.web_fetch import WebFetchTool
 from sanfuclaw.tools.web_search import WebSearchTool
@@ -64,6 +69,28 @@ Tool-use efficiency:
 - When independent operations are needed, emit MULTIPLE tool calls in the
   SAME round (parallel) rather than one per round (serial).
 - Prefer `find ... -exec cat {} +` or `head -n N f1 f2 f3` over many small reads.
+""".strip()
+
+
+PLANNING_GUIDANCE = """
+Planning behavior:
+- For multi-step tasks (3+ distinct steps, multiple tools/sources, or
+  anything where a step might fail and force replanning), call
+  `task_write` FIRST with a numbered plan. Mark exactly one task as
+  'in_progress' and the rest as 'pending'.
+- After each meaningful step (a tool call resolves an item, a research
+  finding answers a sub-question), call `task_write` again with the
+  full updated state: the just-finished task moves to 'completed' with
+  a one-line `note` capturing what you learned, and the next task
+  becomes 'in_progress'.
+- When a tool returns an Error or observation contradicts the plan,
+  REPLAN — call `task_write` to drop dead steps, add new ones, or
+  reorder. Don't silently abandon the plan and improvise.
+- The current plan is appended to your system prompt every turn. Trust
+  it as the live source of truth — execute and revise it, don't
+  re-derive it from history.
+- Skip planning entirely for one-shot questions ('what's the weather',
+  'show me the file X'). Planning overhead is worse than no plan.
 """.strip()
 
 
@@ -106,27 +133,24 @@ class Wiring:
 
 
 def build_transport(settings: Settings) -> LLMTransport:
-    """Construct the LLM transport based on settings + env vars."""
-    api_key = (
-        settings.llm.api_key
-        or os.environ.get("ANTHROPIC_API_KEY", "")
-        or os.environ.get("LLM_API_KEY", "")
-    )
+    """Construct the LLM transport based on settings + env vars.
+
+    Assumes `settings.llm.validate_startup()` has already run — the caller
+    (`build_router`) does this so config errors surface before tools/MCP
+    spawn. We still re-resolve the api key here in case env vars supply it.
+    """
+    api_key = settings.llm.resolved_api_key()
     if not api_key:
+        # Defensive — validate_startup() should have caught this.
         raise MissingAPIKey(
             "No API key found. Set llm.api_key in ~/.sanfuclaw/config.json or LLM_API_KEY env var"
         )
 
     if settings.llm.provider == "anthropic":
         from sanfuclaw.agents.transports.anthropic import AnthropicTransport
-        logger.info("LLM transport: anthropic model=%s", settings.llm.model)
         return AnthropicTransport(api_key=api_key, default_model=settings.llm.model)
 
     from sanfuclaw.agents.transports.openai_compat import OpenAICompatTransport
-    logger.info(
-        "LLM transport: openai_compat model=%s base_url=%s",
-        settings.llm.model, settings.llm.base_url,
-    )
     return OpenAICompatTransport(
         api_key=api_key,
         base_url=settings.llm.base_url,
@@ -137,7 +161,14 @@ def build_transport(settings: Settings) -> LLMTransport:
 async def build_router(
     settings: Settings, store: Store, session_manager: SessionManager
 ) -> Wiring:
-    """Wire tools, MCP servers, transport, agent, router, and scheduler."""
+    """Wire tools, MCP servers, transport, agent, router, and scheduler.
+
+    Validates LLM settings up front so config typos fail fast (before MCP
+    servers fork or skills load). Errors propagate as `LLMConfigError`
+    (or `MissingAPIKey` for the legacy api-key-only path); the CLI catches
+    both and prints a friendly hint."""
+    settings.llm.validate_startup()
+
     skill_registry = SkillRegistry(settings.skills.dir)
     memory_registry = MemoryRegistry(settings.memory.dir)
 
@@ -146,6 +177,7 @@ async def build_router(
     tool_registry.register(WebSearchTool())
     tool_registry.register(WebFetchTool())
     tool_registry.register(WeatherTool())
+    tool_registry.register(TaskWriteTool())
     tool_registry.register(ScheduleCreateTool(store, default_timezone=settings.timezone))
     tool_registry.register(ScheduleListTool(store))
     tool_registry.register(ScheduleSetEnabledTool(store, default_timezone=settings.timezone))
@@ -154,6 +186,11 @@ async def build_router(
         tool_registry.register(LoadSkillTool(skill_registry))
     if len(memory_registry) > 0 or memory_registry.system_prompt_block():
         tool_registry.register(LoadMemoryTool(memory_registry))
+    # Write tools registered unconditionally — the LLM can create the first
+    # entry into an empty memory dir, which is exactly when curating helps most.
+    tool_registry.register(SaveMemoryTool(memory_registry))
+    tool_registry.register(UpdateMemoryTool(memory_registry))
+    tool_registry.register(ForgetMemoryTool(memory_registry))
 
     mcp_manager = MCPManager(settings.mcp.servers)
     await mcp_manager.start()
@@ -183,6 +220,7 @@ async def build_router(
             f"{settings.llm.system_prompt}\n\n"
             f"{SCHEDULE_PROMPT_GUIDANCE}\n\n"
             f"{TOOL_EFFICIENCY_GUIDANCE}\n\n"
+            f"{PLANNING_GUIDANCE}\n\n"
             f"{WEB_RESEARCH_GUIDANCE}"
             f"{memory_suffix}"
         ),
