@@ -8,12 +8,11 @@ drifting apart when the agent or tool wiring changes.
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 
 from sanfuclaw.agents.llm_agent import LLMAgent
 from sanfuclaw.agents.transports.base import LLMTransport
-from sanfuclaw.core.config import Settings
+from sanfuclaw.core.config import LLMConfigError, Settings
 from sanfuclaw.gateway.router import Router
 from sanfuclaw.gateway.scheduler import Scheduler
 from sanfuclaw.gateway.session_manager import SessionManager
@@ -134,27 +133,24 @@ class Wiring:
 
 
 def build_transport(settings: Settings) -> LLMTransport:
-    """Construct the LLM transport based on settings + env vars."""
-    api_key = (
-        settings.llm.api_key
-        or os.environ.get("ANTHROPIC_API_KEY", "")
-        or os.environ.get("LLM_API_KEY", "")
-    )
+    """Construct the LLM transport based on settings + env vars.
+
+    Assumes `settings.llm.validate_startup()` has already run — the caller
+    (`build_router`) does this so config errors surface before tools/MCP
+    spawn. We still re-resolve the api key here in case env vars supply it.
+    """
+    api_key = settings.llm.resolved_api_key()
     if not api_key:
+        # Defensive — validate_startup() should have caught this.
         raise MissingAPIKey(
             "No API key found. Set llm.api_key in ~/.sanfuclaw/config.json or LLM_API_KEY env var"
         )
 
     if settings.llm.provider == "anthropic":
         from sanfuclaw.agents.transports.anthropic import AnthropicTransport
-        logger.info("LLM transport: anthropic model=%s", settings.llm.model)
         return AnthropicTransport(api_key=api_key, default_model=settings.llm.model)
 
     from sanfuclaw.agents.transports.openai_compat import OpenAICompatTransport
-    logger.info(
-        "LLM transport: openai_compat model=%s base_url=%s",
-        settings.llm.model, settings.llm.base_url,
-    )
     return OpenAICompatTransport(
         api_key=api_key,
         base_url=settings.llm.base_url,
@@ -165,7 +161,14 @@ def build_transport(settings: Settings) -> LLMTransport:
 async def build_router(
     settings: Settings, store: Store, session_manager: SessionManager
 ) -> Wiring:
-    """Wire tools, MCP servers, transport, agent, router, and scheduler."""
+    """Wire tools, MCP servers, transport, agent, router, and scheduler.
+
+    Validates LLM settings up front so config typos fail fast (before MCP
+    servers fork or skills load). Errors propagate as `LLMConfigError`
+    (or `MissingAPIKey` for the legacy api-key-only path); the CLI catches
+    both and prints a friendly hint."""
+    settings.llm.validate_startup()
+
     skill_registry = SkillRegistry(settings.skills.dir)
     memory_registry = MemoryRegistry(settings.memory.dir)
 

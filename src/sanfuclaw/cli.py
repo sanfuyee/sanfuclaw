@@ -92,6 +92,59 @@ def _default_config_text() -> str:
 '''
 
 
+def _print_config_error(err: Exception) -> None:
+    """Surface an LLM config error to both stderr (logger) and the user
+    (rich console) so it's visible whether running in a TTY or under a
+    service manager. The hint at the end points users at the wizard."""
+    from sanfuclaw.core import paths
+
+    msg = str(err)
+    logger.error("LLM configuration invalid: %s", msg.replace("\n", " | "))
+    console.print(f"[red]Configuration error:[/red] {msg}")
+    console.print(
+        f"[dim]Edit {paths.config_file()} or re-run [bold]sanfuclaw setup[/bold] "
+        "to fix the LLM section.[/dim]"
+    )
+
+
+def _log_startup_banner(mode: str, channel_mode: str, settings) -> None:
+    """One-line, structured startup log so operators see the active model
+    config in journal/launchd output. Includes redacted api-key tail so
+    you can confirm which key is loaded without leaking it."""
+    from sanfuclaw.core.logging import current_format, current_level, redact_secret
+    from sanfuclaw import __version__
+
+    llm = settings.llm
+    api_key = llm.resolved_api_key()
+    extras: dict[str, object] = {
+        "version": __version__,
+        "mode": mode,
+        "channel_mode": channel_mode,
+        "provider": llm.provider,
+        "model": llm.model,
+        "max_tokens": llm.max_tokens,
+        "context_window": llm.context_window,
+        "max_tool_rounds": llm.max_tool_rounds,
+        "temperature": llm.temperature,
+        "timezone": settings.timezone,
+        "log_level": current_level(),
+        "log_format": current_format(),
+        "api_key_fp": redact_secret(api_key),
+    }
+    if llm.provider == "openai_compat":
+        extras["base_url"] = llm.base_url
+
+    logger.info(
+        "Sanfuclaw v%s starting: mode=%s channels=%s provider=%s model=%s "
+        "tokens=%d/ctx=%d temp=%.2f tz=%s log=%s/%s key=%s%s",
+        __version__, mode, channel_mode, llm.provider, llm.model,
+        llm.max_tokens, llm.context_window, llm.temperature, settings.timezone,
+        current_level(), current_format(), redact_secret(api_key),
+        f" base_url={llm.base_url}" if llm.provider == "openai_compat" else "",
+        extra=extras,
+    )
+
+
 def _ensure_home_initialized() -> None:
     """First-run auto-init: create ~/.sanfuclaw/config.json + skills/ if missing.
 
@@ -145,7 +198,7 @@ async def _run(
     resume: str | None = None,
 ):
     """Main async entry point."""
-    from sanfuclaw.core.config import Settings
+    from sanfuclaw.core.config import LLMConfigError, Settings
     from sanfuclaw.gateway.session_manager import SessionManager
     from sanfuclaw.gateway.wiring import MissingAPIKey, build_router
     from sanfuclaw.storage.sqlite import SQLiteStore
@@ -157,10 +210,16 @@ async def _run(
     if provider:
         settings.llm.provider = provider
 
-    logger.info(
-        "Starting sanfuclaw: mode=%s llm=%s/%s timezone=%s",
-        channel_mode, settings.llm.provider, settings.llm.model, settings.timezone,
-    )
+    # Validate model/api/limits up front. Cheaper to fail here (a single
+    # logged error + exit code) than to spawn MCP servers and channel
+    # auth flows only to discover at the LLM call that a setting is wrong.
+    try:
+        settings.llm.validate_startup()
+    except LLMConfigError as e:
+        _print_config_error(e)
+        raise typer.Exit(1)
+
+    _log_startup_banner("start", channel_mode, settings)
 
     # Set up storage and session manager
     store = SQLiteStore()
@@ -170,9 +229,8 @@ async def _run(
     # Wire tools/MCP/agent/router via shared factory
     try:
         wiring = await build_router(settings, store, session_manager)
-    except MissingAPIKey as e:
-        logger.error("LLM API key missing: %s", e)
-        console.print(f"[red]Error:[/red] {e}")
+    except (MissingAPIKey, LLMConfigError) as e:
+        _print_config_error(e)
         raise typer.Exit(1)
 
     if len(wiring.skill_registry) > 0:
@@ -403,15 +461,25 @@ def serve(
 ):
     """Start the Sanfuclaw gateway server (WebSocket + HTTP + WebChat)."""
     import uvicorn
-    from sanfuclaw.core.config import Settings
+    from sanfuclaw.core.config import LLMConfigError, Settings
     from sanfuclaw.gateway.server import GatewayServer
 
     _ensure_home_initialized()
     settings = Settings.load(config)
+
+    try:
+        settings.llm.validate_startup()
+    except LLMConfigError as e:
+        _print_config_error(e)
+        raise typer.Exit(1)
+
     server = GatewayServer(settings)
 
     final_host = host or settings.gateway.host
     final_port = port or settings.gateway.port
+
+    _log_startup_banner("serve", "webchat", settings)
+    logger.info("Gateway binding %s:%d", final_host, final_port)
 
     console.print(f"[bold green]Sanfuclaw Gateway[/bold green] starting on http://{final_host}:{final_port}")
     console.print(f"  WebChat:  http://{final_host}:{final_port}/")
@@ -419,7 +487,6 @@ def serve(
     console.print(f"  WS:       ws://{final_host}:{final_port}/ws")
     console.print()
 
-    logger.info("Gateway binding %s:%d", final_host, final_port)
     # log_config=None — keep the root handler we installed in _main() so
     # sanfuclaw module logs aren't stomped by uvicorn's default dictConfig.
     uvicorn.run(server.app, host=final_host, port=final_port, log_config=None)
