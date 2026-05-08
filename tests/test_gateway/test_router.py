@@ -50,7 +50,6 @@ class FakeStore:
 
 class CapturingChannel:
     name = "cap"
-    wants_trace = False
 
     def __init__(self):
         self.streamed: list[str] = []
@@ -58,12 +57,17 @@ class CapturingChannel:
         self.trace: list[str] = []
         self.typing = 0
 
-    async def send(self, sid: str, content: str, **kwargs) -> None:
-        if kwargs.get("trace"):
-            self.trace.append(content)
-        elif kwargs.get("done"):
+    async def send(
+        self,
+        sid: str,
+        content: str,
+        *,
+        streaming: bool = False,
+        done: bool = False,
+    ) -> None:
+        if done:
             self.done.append(content)
-        elif kwargs.get("streaming"):
+        elif streaming:
             self.streamed.append(content)
 
     async def send_typing(self, sid: str) -> None:
@@ -72,7 +76,9 @@ class CapturingChannel:
 
 class TraceChannel(CapturingChannel):
     name = "trace-ch"
-    wants_trace = True
+
+    async def send_trace(self, sid: str, content: str) -> None:
+        self.trace.append(content)
 
 
 class ScriptedAgent:
@@ -135,7 +141,7 @@ async def test_route_success_persists_only_new_messages():
 
     assert "".join(channel.streamed) == "hi there"
     assert channel.done == ["hi there"]
-    # Trace not delivered — channel.wants_trace is False.
+    # Trace not delivered — channel doesn't define send_trace.
     assert channel.trace == []
     # Only the user msg + assistant reply (added during this turn) persisted.
     saved_contents = [m.content for m in store.messages]
@@ -149,8 +155,8 @@ async def test_trace_delivered_only_to_opt_in_channel():
     sm = SessionManager(store)
     agent = ScriptedAgent(chunks=["x"], last_trace="step 1: …")
 
-    cap = CapturingChannel()  # wants_trace=False
-    trc = TraceChannel()      # wants_trace=True
+    cap = CapturingChannel()  # no send_trace method
+    trc = TraceChannel()      # defines send_trace
     router = Router(sm)
     router.register_channel(cap)
     router.register_channel(trc)

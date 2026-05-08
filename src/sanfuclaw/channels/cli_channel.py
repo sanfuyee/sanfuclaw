@@ -19,7 +19,6 @@ class CLIChannel:
     """A channel that reads from stdin and writes to stdout."""
 
     name: str = "cli"
-    wants_trace: bool = True
 
     def __init__(self, session_id: str = "cli-session"):
         self._session_id = session_id
@@ -33,19 +32,25 @@ class CLIChannel:
         self._running = False
         console.print("\n[dim]Goodbye![/dim]")
 
-    async def send(self, session_id: str, content: str, **kwargs) -> None:
+    async def send(
+        self,
+        session_id: str,
+        content: str,
+        *,
+        streaming: bool = False,
+        done: bool = False,
+    ) -> None:
         """Print assistant response to terminal."""
-        if kwargs.get("trace"):
-            console.print(f"\n[dim]---[/dim]\n[dim]{content}[/dim]")
-            return
-        done = kwargs.get("done", False)
         if done:
-            # End of response
             sys.stdout.write("\n")
             sys.stdout.flush()
-        elif kwargs.get("streaming", False):
+        elif streaming:
             sys.stdout.write(content)
             sys.stdout.flush()
+
+    async def send_trace(self, session_id: str, content: str) -> None:
+        """Render the per-turn trace under a separator. CLI-only."""
+        console.print(f"\n[dim]---[/dim]\n[dim]{content}[/dim]")
 
     async def send_typing(self, session_id: str) -> None:
         console.print("[dim]Thinking...[/dim]", end="")

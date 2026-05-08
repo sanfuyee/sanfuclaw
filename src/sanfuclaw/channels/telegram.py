@@ -95,20 +95,29 @@ class TelegramChannel:
             source_channel=self.name,
         ))
 
-    async def send(self, session_id: str, content: str, **kwargs) -> None:
-        """Send a message back to Telegram."""
+    async def send(
+        self,
+        session_id: str,
+        content: str,
+        *,
+        streaming: bool = False,
+        done: bool = False,
+    ) -> None:
+        """Send a message back to Telegram.
+
+        Telegram doesn't render character-by-character streams well, so we
+        buffer chunks and flush a single message on done.
+        """
         if not self._app:
             return
 
         chat_id = int(session_id.replace("tg-", ""))
-        done = kwargs.get("done", False)
 
         if done:
-            # Flush accumulated response as one message
             text = self._response_buffers.pop(chat_id, content).strip()
             if text:
                 await self._send_text(chat_id, text)
-        elif kwargs.get("streaming", False):
+        elif streaming:
             if chat_id not in self._response_buffers:
                 self._response_buffers[chat_id] = ""
             self._response_buffers[chat_id] += content

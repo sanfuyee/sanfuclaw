@@ -420,18 +420,23 @@ class WeixinChannel:
                     parts.append(vtt)
         return "\n".join(parts)
 
-    async def send(self, session_id: str, content: str, **kwargs) -> None:
+    async def send(
+        self,
+        session_id: str,
+        content: str,
+        *,
+        streaming: bool = False,
+        done: bool = False,
+    ) -> None:
         """Send a message back to the WeChat user.
 
-        Accumulates streaming chunks and sends as one message when done.
+        Accumulates streaming chunks and sends as one message on done.
         """
-        done = kwargs.get("done", False)
-
         if done:
             text = self._response_buffers.pop(session_id, content).strip()
             if text:
                 await self._send_text(session_id, text)
-        else:
+        elif streaming:
             if session_id not in self._response_buffers:
                 self._response_buffers[session_id] = ""
             self._response_buffers[session_id] += content
