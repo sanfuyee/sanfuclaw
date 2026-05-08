@@ -40,6 +40,7 @@ from sanfuclaw.tools.clipboard import ClipboardReadTool, ClipboardWriteTool
 from sanfuclaw.tools.code_search import CodeSearchTool
 from sanfuclaw.tools.read_file import ReadFileTool
 from sanfuclaw.tools.shell import ShellTool
+from sanfuclaw.tools.speak import SpeakTool
 from sanfuclaw.tools.skill_loader import LoadSkillTool
 from sanfuclaw.tools.task import TaskWriteTool
 from sanfuclaw.tools.weather import WeatherTool
@@ -183,6 +184,7 @@ async def build_router(
     tool_registry.register(CodeSearchTool())
     tool_registry.register(ClipboardReadTool())
     tool_registry.register(ClipboardWriteTool())
+    tool_registry.register(SpeakTool())
     tool_registry.register(WebSearchTool())
     tool_registry.register(WebFetchTool())
     tool_registry.register(WeatherTool())

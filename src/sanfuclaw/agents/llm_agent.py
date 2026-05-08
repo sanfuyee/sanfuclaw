@@ -371,6 +371,10 @@ class LLMAgent:
             text = tool_input.get("text", "")
             preview = text.replace("\n", " ")[:60]
             return f"{len(text)} chars: {preview!r}"
+        elif tool_name == "speak":
+            text = tool_input.get("text", "")
+            preview = text.replace("\n", " ")[:60]
+            return f"{len(text)} chars: {preview!r}"
         else:
             args = ", ".join(f"{k}={v!r}" for k, v in tool_input.items())
             return args[:150]
