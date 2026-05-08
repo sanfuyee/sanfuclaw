@@ -36,6 +36,7 @@ from sanfuclaw.tools.schedule import (
     ScheduleRemoveTool,
     ScheduleSetEnabledTool,
 )
+from sanfuclaw.tools.clipboard import ClipboardReadTool, ClipboardWriteTool
 from sanfuclaw.tools.code_search import CodeSearchTool
 from sanfuclaw.tools.read_file import ReadFileTool
 from sanfuclaw.tools.shell import ShellTool
@@ -180,6 +181,8 @@ async def build_router(
     tool_registry.register(ShellTool())
     tool_registry.register(ReadFileTool())
     tool_registry.register(CodeSearchTool())
+    tool_registry.register(ClipboardReadTool())
+    tool_registry.register(ClipboardWriteTool())
     tool_registry.register(WebSearchTool())
     tool_registry.register(WebFetchTool())
     tool_registry.register(WeatherTool())
