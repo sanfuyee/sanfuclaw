@@ -2,20 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
 from typing import Any
 
 from croniter import croniter
 
 from sanfuclaw.core.errors import ToolError
-from sanfuclaw.core.schedule import Schedule
+from sanfuclaw.core.schedule_service import ScheduleService
 from sanfuclaw.core.session import Session
-from sanfuclaw.gateway.scheduler import compute_next_run
-from sanfuclaw.storage.base import Store
-
-
-def _now() -> datetime:
-    return datetime.now(timezone.utc)
 
 
 class ScheduleCreateTool:
@@ -57,9 +50,8 @@ class ScheduleCreateTool:
         "required": ["cron", "prompt"],
     }
 
-    def __init__(self, store: Store, default_timezone: str = "UTC"):
-        self._store = store
-        self._default_timezone = default_timezone
+    def __init__(self, service: ScheduleService):
+        self._service = service
 
     async def execute(self, params: dict[str, Any], session: Session) -> dict[str, Any]:
         cron_expr = str(params.get("cron", "")).strip()
@@ -82,16 +74,17 @@ class ScheduleCreateTool:
             target_session = str(target_session_raw).strip()
 
         enabled = bool(params.get("enabled", True))
-        timezone_name = str(params.get("timezone") or self._default_timezone).strip()
-        schedule = Schedule(
+        timezone_name = (
+            str(params.get("timezone") or self._service.default_timezone).strip()
+        )
+        schedule = await self._service.create(
             cron=cron_expr,
             prompt=prompt,
             target_channel=target_channel,
             target_session=target_session,
             enabled=enabled,
+            timezone_name=timezone_name,
         )
-        schedule.next_run_at = compute_next_run(cron_expr, _now(), timezone_name)
-        await self._store.add_schedule(schedule)
 
         return {
             "ok": True,
@@ -130,19 +123,20 @@ class ScheduleListTool:
         "required": [],
     }
 
-    def __init__(self, store: Store):
-        self._store = store
+    def __init__(self, service: ScheduleService):
+        self._service = service
 
     async def execute(self, params: dict[str, Any], session: Session) -> dict[str, Any]:
         enabled_only = bool(params.get("enabled_only", False))
-        target_channel = str(params.get("target_channel", "")).strip()
+        target_channel = str(params.get("target_channel", "")).strip() or None
         limit = int(params.get("limit", 20))
         limit = max(1, min(limit, 50))
 
-        rows = await self._store.list_schedules(enabled_only=enabled_only)
-        if target_channel:
-            rows = [r for r in rows if r.target_channel == target_channel]
-        rows = rows[:limit]
+        rows = await self._service.list(
+            enabled_only=enabled_only,
+            target_channel=target_channel,
+            limit=limit,
+        )
 
         return {
             "ok": True,
@@ -187,25 +181,23 @@ class ScheduleSetEnabledTool:
         "required": ["id", "enabled"],
     }
 
-    def __init__(self, store: Store, default_timezone: str = "UTC"):
-        self._store = store
-        self._default_timezone = default_timezone
+    def __init__(self, service: ScheduleService):
+        self._service = service
 
     async def execute(self, params: dict[str, Any], session: Session) -> dict[str, Any]:
         schedule_id = str(params.get("id", "")).strip()
         if not schedule_id:
             raise ToolError("Missing required field: id")
         enabled = bool(params["enabled"])
-        timezone_name = str(params.get("timezone") or self._default_timezone).strip()
+        timezone_name = (
+            str(params.get("timezone") or self._service.default_timezone).strip()
+        )
 
-        schedule = await self._store.get_schedule(schedule_id)
+        schedule = await self._service.set_enabled(
+            schedule_id, enabled, timezone_name=timezone_name,
+        )
         if not schedule:
             raise ToolError(f"No such schedule: {schedule_id}")
-
-        schedule.enabled = enabled
-        if enabled:
-            schedule.next_run_at = compute_next_run(schedule.cron, _now(), timezone_name)
-        await self._store.update_schedule(schedule)
 
         return {
             "ok": True,
@@ -232,15 +224,14 @@ class ScheduleRemoveTool:
         "required": ["id"],
     }
 
-    def __init__(self, store: Store):
-        self._store = store
+    def __init__(self, service: ScheduleService):
+        self._service = service
 
     async def execute(self, params: dict[str, Any], session: Session) -> dict[str, Any]:
         schedule_id = str(params.get("id", "")).strip()
         if not schedule_id:
             raise ToolError("Missing required field: id")
-        schedule = await self._store.get_schedule(schedule_id)
-        if not schedule:
+        removed = await self._service.remove(schedule_id)
+        if not removed:
             raise ToolError(f"No such schedule: {schedule_id}")
-        await self._store.remove_schedule(schedule_id)
         return {"ok": True, "id": schedule_id, "removed": True}
