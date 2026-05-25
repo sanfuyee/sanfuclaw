@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from typing import AsyncIterator
 
-import pytest
-
 from sanfuclaw.agents.llm_agent import LLMAgent
 from sanfuclaw.agents.transports.base import StreamChunk
 from sanfuclaw.core.errors import ToolError

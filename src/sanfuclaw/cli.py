@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import signal
 import sys
 
@@ -29,8 +28,8 @@ def _main(ctx: typer.Context) -> None:
     _configure_logging()
 
 
-from sanfuclaw.cli_cron import cron_app
-from sanfuclaw.cli_service import service_app
+from sanfuclaw.cli_cron import cron_app  # noqa: E402
+from sanfuclaw.cli_service import service_app  # noqa: E402
 app.add_typer(cron_app, name="cron")
 app.add_typer(service_app, name="service")
 
@@ -395,8 +394,6 @@ def _install_shutdown_handlers(runner: asyncio.Task) -> None:
 
 async def _resolve_session(store, session_id_prefix: str):
     """Resolve a session by exact or prefix match on its ID."""
-    from sanfuclaw.core.session import Session
-
     # Try exact match first
     session = await store.get_session(session_id_prefix)
     if session:
@@ -462,7 +459,7 @@ async def _list_sessions(config_path: str, limit: int, channel_filter: str | Non
             )
 
         console.print(table)
-        console.print(f"\n[dim]Resume with:[/dim] sanfuclaw start --resume <ID>")
+        console.print("\n[dim]Resume with:[/dim] sanfuclaw start --resume <ID>")
     finally:
         await store.close()
 
@@ -522,7 +519,7 @@ async def _weixin_login(base_url: str):
     console.print("[bold]WeChat QR Login[/bold]")
     try:
         creds = await qr_login(base_url)
-        console.print(f"[green]Login successful![/green]")
+        console.print("[green]Login successful![/green]")
         console.print(f"  Bot ID:  {creds.bot_id}")
         console.print(f"  User ID: {creds.user_id}")
         console.print(f"  Credentials saved to: {creds.path.absolute()}")

@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from sanfuclaw.agents.llm_agent import LLMAgent
 from sanfuclaw.agents.system_prompt import SystemPromptBuilder
 from sanfuclaw.agents.transports.base import LLMTransport
-from sanfuclaw.core.config import LLMConfigError, Settings
+from sanfuclaw.core.config import Settings
 from sanfuclaw.core.schedule_service import ScheduleService
 from sanfuclaw.gateway.router import Router
 from sanfuclaw.gateway.scheduler import Scheduler

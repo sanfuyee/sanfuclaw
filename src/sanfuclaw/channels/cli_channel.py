@@ -7,7 +7,6 @@ import sys
 from typing import AsyncIterator
 
 from rich.console import Console
-from rich.markdown import Markdown
 
 from sanfuclaw.core.message import Envelope, Message
 from sanfuclaw.core.types import MessageRole
