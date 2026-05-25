@@ -1,6 +1,6 @@
 [project]
 name = "sanfuclaw"
-version = "0.4.2"
+version = "0.4.3"
 description = "A local-first personal AI agent inspired by OpenClaw"
 requires-python = ">=3.12"
 dependencies = [

@@ -10,11 +10,11 @@ list is rejected by both Anthropic and OpenAI as a 400, so when an
 assistant message carrying ``tool_calls`` is dropped, the trailing TOOL
 rows go with it.
 
-Token counts here are estimates (3 chars/token heuristic). They
-overestimate pure English (~4 chars/tok) and underestimate dense CJK
-(~1.5 chars/tok). Overestimating is safe — the trim is more
-conservative than necessary. A real tokenizer would tighten the budget
-but is intentionally out of scope for this layer.
+Token counts here are estimates. ASCII text uses a conservative
+3 chars/token heuristic, while non-ASCII text is counted closer to
+1 char/token so dense CJK histories do not slip past the local budget.
+A real tokenizer would tighten the budget but is intentionally out of
+scope for this layer.
 """
 
 from __future__ import annotations
@@ -31,7 +31,14 @@ logger = logging.getLogger(__name__)
 
 def estimate_tokens(text: str) -> int:
     """Rough char→token estimate. See module docstring for tradeoffs."""
-    return max(1, len(text) // 3)
+    ascii_chars = 0
+    non_ascii_chars = 0
+    for ch in text:
+        if ord(ch) < 128:
+            ascii_chars += 1
+        else:
+            non_ascii_chars += 1
+    return max(1, ((ascii_chars + 2) // 3) + non_ascii_chars)
 
 
 def estimate_message_tokens(msg: Message) -> int:
