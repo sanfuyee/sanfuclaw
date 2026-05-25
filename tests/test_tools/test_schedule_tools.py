@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from sanfuclaw.core.errors import ToolError
+from sanfuclaw.core.schedule_service import ScheduleService
 from sanfuclaw.core.session import Session
 from sanfuclaw.storage.sqlite import SQLiteStore
 from sanfuclaw.tools.schedule import (
@@ -29,12 +30,17 @@ async def store(tmp_path):
 
 
 @pytest.fixture
+def service(store) -> ScheduleService:
+    return ScheduleService(store, default_timezone="Asia/Shanghai")
+
+
+@pytest.fixture
 def session() -> Session:
     return Session(id="tg-12345", channel_id="telegram", sender_id="u1")
 
 
-async def test_schedule_create_defaults_to_current_conversation(store, session):
-    tool = ScheduleCreateTool(store, default_timezone="Asia/Shanghai")
+async def test_schedule_create_defaults_to_current_conversation(service, store, session):
+    tool = ScheduleCreateTool(service)
 
     result = await tool.execute(
         {"cron": "0 14 * * *", "prompt": "Send tomorrow weather"},
@@ -55,17 +61,17 @@ async def test_schedule_create_defaults_to_current_conversation(store, session):
     assert row.target_session == "tg-12345"
 
 
-async def test_schedule_create_rejects_invalid_cron(store, session):
-    tool = ScheduleCreateTool(store, default_timezone="Asia/Shanghai")
+async def test_schedule_create_rejects_invalid_cron(service, session):
+    tool = ScheduleCreateTool(service)
     with pytest.raises(ToolError):
         await tool.execute({"cron": "not-a-cron", "prompt": "x"}, session)
 
 
-async def test_schedule_list_filter_enable_disable_and_remove(store, session):
-    create = ScheduleCreateTool(store, default_timezone="Asia/Shanghai")
-    list_tool = ScheduleListTool(store)
-    set_enabled = ScheduleSetEnabledTool(store, default_timezone="Asia/Shanghai")
-    remove = ScheduleRemoveTool(store)
+async def test_schedule_list_filter_enable_disable_and_remove(service, session):
+    create = ScheduleCreateTool(service)
+    list_tool = ScheduleListTool(service)
+    set_enabled = ScheduleSetEnabledTool(service)
+    remove = ScheduleRemoveTool(service)
 
     a = await create.execute({"cron": "0 9 * * *", "prompt": "a"}, session)
     b = await create.execute(

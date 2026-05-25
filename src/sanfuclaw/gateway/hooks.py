@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 import logging
 from enum import Enum
 from typing import Any, Callable, Coroutine

@@ -11,8 +11,10 @@ import logging
 from dataclasses import dataclass
 
 from sanfuclaw.agents.llm_agent import LLMAgent
+from sanfuclaw.agents.system_prompt import SystemPromptBuilder
 from sanfuclaw.agents.transports.base import LLMTransport
-from sanfuclaw.core.config import LLMConfigError, Settings
+from sanfuclaw.core.config import Settings
+from sanfuclaw.core.schedule_service import ScheduleService
 from sanfuclaw.gateway.router import Router
 from sanfuclaw.gateway.scheduler import Scheduler
 from sanfuclaw.gateway.session_manager import SessionManager
@@ -34,7 +36,11 @@ from sanfuclaw.tools.schedule import (
     ScheduleRemoveTool,
     ScheduleSetEnabledTool,
 )
+from sanfuclaw.tools.clipboard import ClipboardReadTool, ClipboardWriteTool
+from sanfuclaw.tools.code_search import CodeSearchTool
+from sanfuclaw.tools.read_file import ReadFileTool
 from sanfuclaw.tools.shell import ShellTool
+from sanfuclaw.tools.speak import SpeakTool
 from sanfuclaw.tools.skill_loader import LoadSkillTool
 from sanfuclaw.tools.task import TaskWriteTool
 from sanfuclaw.tools.weather import WeatherTool
@@ -174,14 +180,20 @@ async def build_router(
 
     tool_registry = ToolRegistry()
     tool_registry.register(ShellTool())
+    tool_registry.register(ReadFileTool())
+    tool_registry.register(CodeSearchTool())
+    tool_registry.register(ClipboardReadTool())
+    tool_registry.register(ClipboardWriteTool())
+    tool_registry.register(SpeakTool())
     tool_registry.register(WebSearchTool())
     tool_registry.register(WebFetchTool())
     tool_registry.register(WeatherTool())
     tool_registry.register(TaskWriteTool())
-    tool_registry.register(ScheduleCreateTool(store, default_timezone=settings.timezone))
-    tool_registry.register(ScheduleListTool(store))
-    tool_registry.register(ScheduleSetEnabledTool(store, default_timezone=settings.timezone))
-    tool_registry.register(ScheduleRemoveTool(store))
+    schedule_service = ScheduleService(store, default_timezone=settings.timezone)
+    tool_registry.register(ScheduleCreateTool(schedule_service))
+    tool_registry.register(ScheduleListTool(schedule_service))
+    tool_registry.register(ScheduleSetEnabledTool(schedule_service))
+    tool_registry.register(ScheduleRemoveTool(schedule_service))
     if len(skill_registry) > 0:
         tool_registry.register(LoadSkillTool(skill_registry))
     if len(memory_registry) > 0 or memory_registry.system_prompt_block():
@@ -196,8 +208,7 @@ async def build_router(
     await mcp_manager.start()
     mcp_tool_count = 0
     for server_name, mcp_tool in mcp_manager.tools():
-        mcp_session = mcp_manager.get_session(server_name)
-        tool_registry.register(MCPToolAdapter(server_name, mcp_tool, mcp_session))
+        tool_registry.register(MCPToolAdapter(server_name, mcp_tool, mcp_manager))
         mcp_tool_count += 1
     logger.info(
         "Tool registry ready: %d local + %d MCP tool(s) from %d skill(s), %d memory entr(ies)",
@@ -207,8 +218,16 @@ async def build_router(
         len(memory_registry),
     )
 
-    memory_block = memory_registry.system_prompt_block()
-    memory_suffix = f"\n\n{memory_block}" if memory_block else ""
+    prompt_builder = (
+        SystemPromptBuilder()
+        .add("base", settings.llm.system_prompt)
+        .add("schedule", SCHEDULE_PROMPT_GUIDANCE)
+        .add("tool_efficiency", TOOL_EFFICIENCY_GUIDANCE)
+        .add("planning", PLANNING_GUIDANCE)
+        .add("web_research", WEB_RESEARCH_GUIDANCE)
+        .add("memory", memory_registry.system_prompt_block())
+    )
+    prompt_builder.log_summary()
 
     transport = build_transport(settings)
     agent = LLMAgent(
@@ -216,14 +235,7 @@ async def build_router(
         transport=transport,
         tool_registry=tool_registry,
         skill_registry=skill_registry,
-        system_prompt=(
-            f"{settings.llm.system_prompt}\n\n"
-            f"{SCHEDULE_PROMPT_GUIDANCE}\n\n"
-            f"{TOOL_EFFICIENCY_GUIDANCE}\n\n"
-            f"{PLANNING_GUIDANCE}\n\n"
-            f"{WEB_RESEARCH_GUIDANCE}"
-            f"{memory_suffix}"
-        ),
+        system_prompt=prompt_builder.render(),
         model=settings.llm.model,
         max_tokens=settings.llm.max_tokens,
         context_window=settings.llm.context_window,

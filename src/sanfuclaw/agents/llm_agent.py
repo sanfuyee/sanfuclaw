@@ -352,6 +352,29 @@ class LLMAgent:
         elif tool_name == "task_write":
             tasks = tool_input.get("tasks") or []
             return f"{len(tasks)} tasks"
+        elif tool_name == "read_file":
+            path = tool_input.get("path", "")
+            offset = tool_input.get("offset")
+            limit = tool_input.get("limit")
+            window = ""
+            if offset or limit:
+                window = f" [{offset or 1}:+{limit or 'rest'}]"
+            return f"{path}{window}"
+        elif tool_name == "code_search":
+            pattern = tool_input.get("pattern", "")
+            path = tool_input.get("path") or "."
+            glob = tool_input.get("glob")
+            return f"/{pattern}/ in {path}" + (f" ({glob})" if glob else "")
+        elif tool_name == "clipboard_read":
+            return "(read)"
+        elif tool_name == "clipboard_write":
+            text = tool_input.get("text", "")
+            preview = text.replace("\n", " ")[:60]
+            return f"{len(text)} chars: {preview!r}"
+        elif tool_name == "speak":
+            text = tool_input.get("text", "")
+            preview = text.replace("\n", " ")[:60]
+            return f"{len(text)} chars: {preview!r}"
         else:
             args = ", ".join(f"{k}={v!r}" for k, v in tool_input.items())
             return args[:150]

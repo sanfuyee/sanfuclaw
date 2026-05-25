@@ -78,10 +78,12 @@ class Router:
             await channel.send(sid, full_response, done=True)
 
             # Deliver the per-turn trace as a separate event, but only to
-            # channels that opt in (CLI). User-facing channels skip it.
+            # channels that opt in (define a send_trace method). User-facing
+            # channels (Telegram, WeChat) just don't define it and skip the trace.
             trace = getattr(agent, "last_trace", "")
-            if trace and getattr(channel, "wants_trace", False):
-                await channel.send(sid, trace, trace=True)
+            send_trace = getattr(channel, "send_trace", None)
+            if trace and send_trace is not None:
+                await send_trace(sid, trace)
 
             # Persist session metadata + only the messages added this turn.
             await self._session_manager.update_session(session)

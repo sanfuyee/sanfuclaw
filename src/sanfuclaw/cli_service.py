@@ -167,7 +167,7 @@ def _print_manual_steps(manager: str, units: list[Unit]) -> None:
     console.print("[bold]To enable manually:[/bold]")
     tgt_parent = units[0].target.parent
     if manager == "systemd":
-        console.print(f"  sudo loginctl enable-linger $USER   # one-time, survives logout")
+        console.print("  sudo loginctl enable-linger $USER   # one-time, survives logout")
         console.print(f"  mkdir -p {tgt_parent}")
         for u in units:
             console.print(f"  ln -sf {u.source} {u.target}")

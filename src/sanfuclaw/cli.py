@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
+import signal
 import sys
 
 import typer
@@ -28,8 +28,8 @@ def _main(ctx: typer.Context) -> None:
     _configure_logging()
 
 
-from sanfuclaw.cli_cron import cron_app
-from sanfuclaw.cli_service import service_app
+from sanfuclaw.cli_cron import cron_app  # noqa: E402
+from sanfuclaw.cli_service import service_app  # noqa: E402
 app.add_typer(cron_app, name="cron")
 app.add_typer(service_app, name="service")
 
@@ -243,62 +243,37 @@ async def _run(
     router = wiring.router
     is_all = channel_mode == "all"
 
-    # Build channels. In `all` mode any per-channel failure is logged and
-    # skipped so the remaining channels keep working; in single-channel
-    # mode it stays a hard error because the user explicitly asked for
-    # that channel.
-    candidates: list = []
-    skipped: list[tuple[str, str]] = []
-
-    def _fail(name: str, reason: str) -> None:
-        if is_all:
-            skipped.append((name, reason))
-        else:
-            console.print(f"[red]Error:[/red] {reason}")
-            raise typer.Exit(1)
-
+    # Resolve session for CLI: default is a new session each time, or
+    # a resumed one if --resume was passed.
+    cli_session_id: str | None = None
     if channel_mode in ("cli", "all"):
-        from sanfuclaw.channels.cli_channel import CLIChannel
-
-        # Resolve session for CLI: default is a new session each time.
         if resume:
             resolved = await _resolve_session(store, resume)
             if not resolved:
                 console.print(f"[red]Error:[/red] No session matching '{resume}'")
                 raise typer.Exit(1)
             cli_session_id = resolved.id
-            console.print(f"[dim]Resuming session {resolved.id[:8]}… ({len(resolved.history)} messages)[/dim]")
-        else:
-            import uuid
-            cli_session_id = f"cli-{uuid.uuid4().hex[:8]}"
-        candidates.append(CLIChannel(session_id=cli_session_id))
-
-    if channel_mode in ("telegram", "all"):
-        tg_config = settings.channels.get("telegram")
-        bot_token = getattr(tg_config, "bot_token", "") if tg_config else ""
-        bot_token = bot_token or os.environ.get("TELEGRAM_BOT_TOKEN", "")
-        if not bot_token:
-            _fail(
-                "telegram",
-                "Telegram bot token not found. Set channels.telegram.bot_token "
-                "in config or TELEGRAM_BOT_TOKEN env var.",
+            console.print(
+                f"[dim]Resuming session {resolved.id[:8]}… "
+                f"({len(resolved.history)} messages)[/dim]"
             )
-        else:
-            from sanfuclaw.channels.telegram import TelegramChannel
-            allowed = getattr(tg_config, "allowed_users", None) if tg_config else None
-            candidates.append(TelegramChannel(bot_token=bot_token, allowed_users=allowed))
 
-    if channel_mode in ("weixin", "all"):
-        from sanfuclaw.channels.weixin import WeixinChannel
-        wx = WeixinChannel()
-        if not wx._creds.is_valid:
-            _fail(
-                "weixin",
-                "WeChat not logged in. Run 'sanfuclaw weixin-login' first "
-                "(generates ~/.sanfuclaw/weixin_credentials.json).",
-            )
-        else:
-            candidates.append(wx)
+    # Build channels. In `all` mode any per-channel failure is logged and
+    # skipped so the remaining channels keep working; in single-channel
+    # mode it stays a hard error because the user explicitly asked for it.
+    from sanfuclaw.channels.factory import build_channels
+
+    requested = [channel_mode]
+    build = build_channels(settings, requested, cli_session_id=cli_session_id)
+    candidates = build.channels
+    skipped = list(build.skipped)
+
+    if not is_all and skipped and not candidates:
+        # Single-channel mode + the requested channel couldn't be built:
+        # surface the first failure as a hard error so the user fixes it.
+        name, reason = skipped[0]
+        console.print(f"[red]Error:[/red] {reason}")
+        raise typer.Exit(1)
 
     if not candidates and not skipped:
         console.print(f"[red]Error:[/red] Unknown channel: {channel_mode}")
@@ -350,39 +325,75 @@ async def _run(
     await wiring.start_runtime()
     logger.info("Runtime ready — listening for messages")
 
-    try:
-        if len(channels) == 1:
-            # Single channel — simple loop
-            async for envelope in channels[0].receive():
-                try:
-                    await router.route(envelope)
-                except Exception as e:
-                    console.print(f"\n[red]Error:[/red] {e}\n")
-        else:
-            # Multiple channels — run receive loops concurrently
-            async def _channel_loop(ch):
-                async for envelope in ch.receive():
-                    try:
-                        await router.route(envelope)
-                    except Exception as e:
-                        console.print(f"\n[red]Error:[/red] [{ch.name}] {e}\n")
+    # Run channel receive loops as a single task so we can cancel cleanly
+    # on SIGTERM (systemd/launchd) — the previous code only handled
+    # KeyboardInterrupt, leaving MCP servers and the scheduler dangling
+    # when a service manager asked for a graceful stop.
+    runner = asyncio.create_task(_serve_channels(channels, router))
+    _install_shutdown_handlers(runner)
 
-            async with asyncio.TaskGroup() as tg:
-                for ch in channels:
-                    tg.create_task(_channel_loop(ch))
-    except (KeyboardInterrupt, EOFError):
+    try:
+        await runner
+    except (KeyboardInterrupt, EOFError, asyncio.CancelledError):
         pass
     finally:
         for ch in channels:
-            await ch.stop()
+            try:
+                await ch.stop()
+            except Exception as e:
+                logger.warning("Channel %s stop failed: %s", ch.name, e)
         await wiring.shutdown()
         await store.close()
 
 
+async def _serve_channels(channels: list, router) -> None:
+    """Run every channel's receive loop until cancelled or exhausted."""
+    if len(channels) == 1:
+        ch = channels[0]
+        async for envelope in ch.receive():
+            try:
+                await router.route(envelope)
+            except Exception as e:
+                console.print(f"\n[red]Error:[/red] {e}\n")
+        return
+
+    async def _channel_loop(ch):
+        async for envelope in ch.receive():
+            try:
+                await router.route(envelope)
+            except Exception as e:
+                console.print(f"\n[red]Error:[/red] [{ch.name}] {e}\n")
+
+    async with asyncio.TaskGroup() as tg:
+        for ch in channels:
+            tg.create_task(_channel_loop(ch))
+
+
+def _install_shutdown_handlers(runner: asyncio.Task) -> None:
+    """Cancel the channel runner on SIGTERM/SIGINT.
+
+    Without this, `systemctl stop` (SIGTERM) just kills the process before
+    the `finally` block runs, leaving MCP child processes orphaned.
+    """
+    loop = asyncio.get_running_loop()
+
+    def _request_stop(signame: str) -> None:
+        if not runner.done():
+            logger.info("Shutdown signal %s received, draining…", signame)
+            runner.cancel()
+
+    for sig, name in [(signal.SIGTERM, "SIGTERM"), (signal.SIGINT, "SIGINT")]:
+        try:
+            loop.add_signal_handler(sig, _request_stop, name)
+        except NotImplementedError:
+            # Windows doesn't support add_signal_handler on the proactor
+            # event loop — Ctrl-C still raises KeyboardInterrupt and is
+            # handled in the caller.
+            pass
+
+
 async def _resolve_session(store, session_id_prefix: str):
     """Resolve a session by exact or prefix match on its ID."""
-    from sanfuclaw.core.session import Session
-
     # Try exact match first
     session = await store.get_session(session_id_prefix)
     if session:
@@ -448,7 +459,7 @@ async def _list_sessions(config_path: str, limit: int, channel_filter: str | Non
             )
 
         console.print(table)
-        console.print(f"\n[dim]Resume with:[/dim] sanfuclaw start --resume <ID>")
+        console.print("\n[dim]Resume with:[/dim] sanfuclaw start --resume <ID>")
     finally:
         await store.close()
 
@@ -508,7 +519,7 @@ async def _weixin_login(base_url: str):
     console.print("[bold]WeChat QR Login[/bold]")
     try:
         creds = await qr_login(base_url)
-        console.print(f"[green]Login successful![/green]")
+        console.print("[green]Login successful![/green]")
         console.print(f"  Bot ID:  {creds.bot_id}")
         console.print(f"  User ID: {creds.user_id}")
         console.print(f"  Credentials saved to: {creds.path.absolute()}")

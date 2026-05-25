@@ -1,9 +1,20 @@
-"""Configuration management — JSON (default) or TOML, plus env vars."""
+"""Configuration management — JSON (default) or TOML, plus env vars.
+
+Precedence (highest wins):
+  1. CLI flags (`--model`, `--provider`, `--channel`) — applied in cli.py
+  2. SANFUCLAW_* env vars (Pydantic-style, e.g. SANFUCLAW_LLM__MODEL)
+  3. Explicit `--config` path passed to `sanfuclaw start`
+  4. $SANFUCLAW_CONFIG env var
+  5. ~/.sanfuclaw/config.json
+  6. ./sanfuclaw.toml (legacy, deprecated — see _legacy_toml_warning)
+"""
 
 from __future__ import annotations
 
 import json
+import logging
 import tomllib
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +22,8 @@ from pydantic import Field
 from pydantic_settings import BaseSettings
 
 from sanfuclaw.core import paths
+
+logger = logging.getLogger(__name__)
 
 
 SUPPORTED_PROVIDERS = ("openai_compat", "anthropic")
@@ -177,9 +190,21 @@ def _resolve_config_path(path: str | Path | None) -> Path | None:
 
     legacy = Path("sanfuclaw.toml")
     if legacy.exists():
+        _warn_legacy_toml(legacy)
         return legacy
 
     return None
+
+
+def _warn_legacy_toml(path: Path) -> None:
+    """sanfuclaw.toml is the pre-0.4 location. Surface it loudly so users
+    migrate to ~/.sanfuclaw/config.json before the fallback is removed."""
+    msg = (
+        f"Loading legacy {path} — this fallback will be removed in a future release. "
+        f"Migrate to {paths.config_file()} (run `sanfuclaw init` to scaffold)."
+    )
+    warnings.warn(msg, DeprecationWarning, stacklevel=3)
+    logger.warning(msg)
 
 
 def _read_config(path: Path) -> dict[str, Any]:
