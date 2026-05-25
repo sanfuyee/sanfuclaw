@@ -17,6 +17,11 @@ def test_estimate_tokens_min_one():
     assert estimate_tokens("x" * 30) == 10
 
 
+def test_estimate_tokens_counts_cjk_conservatively():
+    assert estimate_tokens("你好世界") == 4
+    assert estimate_tokens("abc你好") == 3
+
+
 def test_no_context_window_means_no_trim():
     budget = HistoryBudget.from_components(
         context_window=None, max_tokens=100,
