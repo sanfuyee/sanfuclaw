@@ -133,6 +133,17 @@ async def test_usage_recorded_in_trace():
     assert "5 reasoning" in agent.last_trace
 
 
+async def test_empty_llm_turn_yields_visible_notice():
+    transport = FakeTransport([[stop()]])
+    agent = LLMAgent(name="t", transport=transport)
+    session = make_session()
+    out = await collect(agent.process(make_envelope("hi"), session))
+    assert "no visible response" in out
+    assert session.history[-1].role == MessageRole.ASSISTANT
+    assert session.history[-1].content == out
+    assert session.history[-1].metadata["empty_response"] is True
+
+
 # ---------- tool loop -------------------------------------------------------
 
 

@@ -241,6 +241,21 @@ class LLMAgent:
                 assistant_metadata["reasoning_content"] = full_reasoning
 
             if not tool_calls:
+                if not full_response.strip():
+                    notice = (
+                        "The model returned no visible response for this turn. "
+                        "Please try again."
+                    )
+                    logger.warning(
+                        "LLM turn returned no visible text or tool calls: "
+                        "session=%s round=%d reasoning_chars=%d",
+                        session.id[:8], round_num, len(full_reasoning),
+                        extra={**log_ctx, "round": round_num,
+                               "reasoning_chars": len(full_reasoning)},
+                    )
+                    full_response = notice
+                    assistant_metadata["empty_response"] = True
+                    yield notice
                 # Save only the LLM's actual response, not the trace
                 session.add_message(Message(
                     role=MessageRole.ASSISTANT,

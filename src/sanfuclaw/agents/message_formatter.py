@@ -130,6 +130,11 @@ class OpenAIMessageFormatter:
                 # Plain text assistant turn that happens to carry reasoning.
                 # DeepSeek requires the original reasoning_content to come
                 # back on every subsequent turn or it returns 400.
+                if not msg.content:
+                    logger.warning(
+                        "Skipping empty assistant message with reasoning_content in history"
+                    )
+                    continue
                 messages.append({
                     "role": "assistant",
                     "content": msg.content,
@@ -152,6 +157,9 @@ class OpenAIMessageFormatter:
                 })
 
             else:
+                if msg.role == MessageRole.ASSISTANT and not msg.content:
+                    logger.warning("Skipping empty assistant message in history")
+                    continue
                 messages.append(msg.to_llm_dict())
         return messages
 

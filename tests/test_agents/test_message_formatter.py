@@ -102,6 +102,21 @@ def test_openai_carries_reasoning_for_plain_assistant():
     assert out[0]["content"] == "answer"
 
 
+def test_openai_drops_empty_plain_assistant_messages():
+    history = [
+        Message(role=MessageRole.USER, content="hi", session_id="s"),
+        Message(role=MessageRole.ASSISTANT, content="", session_id="s"),
+        Message(role=MessageRole.ASSISTANT, content="", session_id="s",
+                metadata={"reasoning_content": "thinking only"}),
+        Message(role=MessageRole.USER, content="again", session_id="s"),
+    ]
+    out = OpenAIMessageFormatter().build(history)
+    assert out == [
+        {"role": "user", "content": "hi"},
+        {"role": "user", "content": "again"},
+    ]
+
+
 def test_openai_drops_orphan_tool_result_with_no_id():
     history = [
         Message(role=MessageRole.TOOL, content="orphan",
